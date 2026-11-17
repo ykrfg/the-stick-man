@@ -1,61 +1,77 @@
-// Every tuning number and colour in one place. The playfield is a fixed 1280x720 logical area;
-// the renderer scales it to the window, so no rule below depends on the screen size.
+// Shared tuning for THE STICK MAN: the world grid, the palette, the wanted-level
+// thresholds and the numbers every other module reads. Nothing here draws or moves;
+// it is the one place the game's constants live.
 
-export const FIELD = { width: 1280, height: 720, groundY: 664 };
+/** The canvas is laid out for a 1280x720 view; the camera shows a window of this size. */
+export const VIEW = { width: 1280, height: 720 };
 
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
-export const STEP = 1 / 60;
+/** The whole city of Palmera, in world pixels: about three screens by three. */
+export const WORLD = { width: 3360, height: 2520 };
+
+/** Road centre lines. Avenues run north-south, streets east-west; roads are ROAD.width wide. */
+export const ROAD = {
+  width: 110,
+  avenues: [280, 720, 1160, 1600, 2040, 2480, 2920],
+  streets: [280, 720, 1160, 1600, 2040],
+};
+
+/** Bright, flat, sun-soaked palette: the city is cheerful on purpose, the stick men are not. */
+export const COLORS = {
+  sky: '#79c7e3',
+  ground: '#cfd8b0',
+  sidewalk: '#e8e2d0',
+  road: '#4a4a52',
+  roadLine: '#f7f3df',
+  crosswalk: '#d9d9d9',
+  park: '#8fce6e',
+  sand: '#f2ddab',
+  water: '#3f9fd8',
+  buildingRoofs: ['#ff8a5c', '#ffd166', '#ef6461', '#7fb5d5', '#a8d08d', '#f4a7c3', '#ffe8a3', '#95d5b2', '#f6bd60', '#84a98c'],
+  buildingWalls: ['#e56b3d', '#e0a92e', '#c94f4c', '#5b8db8', '#86b06c', '#d67fa6', '#e0c06a', '#6fae86', '#d99a3d', '#678a70'],
+};
+
+/** Heat points at which each wanted star lights up; stars are the count passed. */
+export const HEAT_THRESHOLDS = [30, 80, 150, 240, 350];
+/** Heat a crime adds, by kind. */
+export const HEAT_FOR = {
+  punchPed: 25,
+  punchCop: 60,
+  stealCar: 40,
+  runOver: 80,
+  shotFired: 12,
+  shootPed: 70,
+  hitCar: 10,
+};
 
 export const PLAYER = {
-  width: 72,
-  height: 24,
-  speed: 560,
-  invulnerable: 1.5,
+  radius: 11,
+  walkSpeed: 175,
+  sprintSpeed: 265,
+  maxHp: 100,
+  punchRange: 36,
+  punchDamage: 34,
+  punchCooldown: 0.32,
+  shotCooldown: 0.22,
+  bulletSpeed: 760,
+  bulletRange: 580,
+  bulletDamage: 40,
 };
 
-export const LIVES = 3;
-
-export const BLOCK = {
-  minWidth: 40,
-  maxWidth: 110,
-  height: 36,
-  speed: 240,
-  speedPerLevel: 30,
-  speedJitter: 90,
-  interval: 0.55,
-  intervalScale: 0.88,
-  minInterval: 0.14,
-  dodgePoints: 1,
+export const CAR = {
+  length: 48,
+  width: 24,
+  radius: 21,
+  maxSpeed: 440,
+  maxReverse: 150,
+  accel: 360,
+  brake: 520,
+  turnRate: 2.7,
+  trafficSpeed: 165,
+  policeSpeed: 470,
 };
 
-export const COIN = {
-  size: 24,
-  speed: 190,
-  speedPerLevel: 14,
-  interval: 1.4,
-  intervalJitter: 0.8,
-  points: 10,
-};
+export const SAVE_KEY = 'the-stick-man-save-v1';
 
-/** Seconds of play per level, and the last level: speeds and spawn rates stop growing there. */
-export const LEVEL = { seconds: 12, max: 12 };
-
-/** How many falling things can exist at once; the pool is allocated once, at boot. */
-export const POOL_SIZE = 64;
-
-export const PALETTE = {
-  backdrop: '#11141b',
-  sky: '#1b1f2a',
-  ground: '#2a3040',
-  player: '#4fc3f7',
-  block: '#e5534b',
-  coin: '#f2c94c',
-  panel: '#252b38',
-  text: '#eef1f5',
-  muted: '#8b93a3',
-};
-
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
-
-/** Where the best score is kept between visits (this browser only). */
-export const BEST_KEY = 'block-dodger.best';
+/** Price of the pistol at the Ammo Hut, and the Spray 'n Go fee per wanted star. */
+export const PISTOL_PRICE = 120;
+export const SPRAY_PER_STAR = 40;
