@@ -136,7 +136,9 @@ export function createFigure(opts = {}) {
   const black = opts.fill === 'black';
   const bodyMat = toonMat(black ? INK : 0xffffff);
   const limbMat = toonMat(INK);
-  const limbR = black ? 2.7 : 2.3;
+  // Lean proportions per the character reference sheet: limbs and torso are thin
+  // line-like strokes, and the round head is about a fifth of the total height.
+  const limbR = black ? 1.25 : 1.05;
 
   const group = new THREE.Group();
   const tilt = new THREE.Group();
@@ -144,7 +146,7 @@ export function createFigure(opts = {}) {
 
   // Soft blob shadow that stays flat on the ground whatever the body does.
   const shadow = new THREE.Mesh(
-    new THREE.CircleGeometry(13, 20),
+    new THREE.CircleGeometry(10, 20),
     new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.2, depthWrite: false }),
   );
   shadow.rotation.x = -Math.PI / 2;
@@ -156,14 +158,14 @@ export function createFigure(opts = {}) {
   pelvis.position.y = HIP_H;
   tilt.add(pelvis);
   const pelvisBall = new THREE.Mesh(sphereGeo, bodyMat);
-  pelvisBall.scale.set(5.4, 4.6, 5.4);
+  pelvisBall.scale.set(2.1, 1.8, 2.1);
   pelvis.add(pelvisBall);
-  if (!black) outline(pelvisBall, 1.22);
+  if (!black) outline(pelvisBall, 1.3);
 
   // Legs: hip pivot -> thigh -> knee pivot -> shin -> foot.
   function makeLeg(side) {
     const hip = new THREE.Group();
-    hip.position.set(0, -0.5, side * 4.6);
+    hip.position.set(0, -0.5, side * 1.7);
     const thigh = segment(limbR, 8, limbMat, limbR * 1.05);
     hip.add(thigh);
     const knee = new THREE.Group();
@@ -171,8 +173,8 @@ export function createFigure(opts = {}) {
     thigh.add(knee);
     const shin = segment(limbR * 0.88, 8, limbMat, 0);
     knee.add(shin);
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(6.4, 2.1, 3.4), limbMat);
-    foot.position.set(1.4, -8.4, 0);
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(4.8, 1.2, 2.1), limbMat);
+    foot.position.set(1.1, -8.35, 0);
     shin.add(foot);
     pelvis.add(hip);
     return { hip, knee };
@@ -185,20 +187,20 @@ export function createFigure(opts = {}) {
   spine.position.y = 1;
   pelvis.add(spine);
   const torso = new THREE.Mesh(cylGeo, bodyMat);
-  torso.scale.set(4.3, 10.5, 4.3);
+  torso.scale.set(1.3, 10.5, 1.3);
   torso.position.y = 5.2;
   spine.add(torso);
-  if (!black) outline(torso, 1.16);
+  if (!black) outline(torso, 1.3);
   const chestBall = new THREE.Mesh(sphereGeo, bodyMat);
-  chestBall.scale.set(6.1, 5.2, 6.1);
+  chestBall.scale.set(2.3, 2.0, 2.3);
   chestBall.position.y = 10.4;
   spine.add(chestBall);
-  if (!black) outline(chestBall, 1.18);
+  if (!black) outline(chestBall, 1.25);
 
   // Arms: shoulder pivot -> upper arm -> elbow pivot -> forearm -> hand.
   function makeArm(side) {
     const shoulder = new THREE.Group();
-    shoulder.position.set(0, 9.6, side * 6.9);
+    shoulder.position.set(0, 9.8, side * 2.0);
     const upper = segment(limbR, 10, limbMat, limbR * 1.05);
     shoulder.add(upper);
     const elbow = new THREE.Group();
@@ -207,7 +209,7 @@ export function createFigure(opts = {}) {
     const fore = segment(limbR * 0.88, 9, limbMat, 0);
     elbow.add(fore);
     const hand = new THREE.Mesh(sphereGeo, black ? limbMat : bodyMat);
-    hand.scale.setScalar(3.1);
+    hand.scale.setScalar(1.6);
     hand.position.y = -9.6;
     fore.add(hand);
     if (!black) outline(hand, 1.25);
@@ -222,10 +224,10 @@ export function createFigure(opts = {}) {
   neck.position.y = 12.6;
   spine.add(neck);
   const head = new THREE.Mesh(sphereGeo, bodyMat);
-  head.scale.setScalar(9.3);
-  head.position.set(0.8, 4.6, 0);
+  head.scale.setScalar(4.1);
+  head.position.set(0.5, 3.0, 0);
   neck.add(head);
-  if (!black) outline(head, 1.13);
+  if (!black) outline(head, 1.16);
 
   // Mouth plane just in front of the face.
   const mouthMat = new THREE.MeshBasicMaterial({
@@ -234,27 +236,27 @@ export function createFigure(opts = {}) {
     color: black ? 0xffffff : INK,
   });
   mouthMat.map = getMouthTextures().neutral;
-  const mouth = new THREE.Mesh(new THREE.PlaneGeometry(11.5, 11.5), mouthMat);
-  mouth.position.set(9.6, 2.9, 0);
+  const mouth = new THREE.Mesh(new THREE.PlaneGeometry(5.6, 5.6), mouthMat);
+  mouth.position.set(4.75, 2.3, 0);
   mouth.rotation.y = Math.PI / 2;
   neck.add(mouth);
 
   if (opts.cap) {
-    const capMesh = new THREE.Mesh(new THREE.CylinderGeometry(6.9, 7.3, 2.6, 14), toonMat(opts.cap));
-    capMesh.position.set(0.9, 12.4, 0);
+    const capMesh = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 3.6, 1.5, 14), toonMat(opts.cap));
+    capMesh.position.set(0.55, 6.35, 0);
     capMesh.rotation.z = -0.1;
     neck.add(capMesh);
-    const brim = new THREE.Mesh(new THREE.BoxGeometry(6.5, 0.9, 8.6), toonMat(opts.cap));
-    brim.position.set(6.4, 11.2, 0);
+    const brim = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.5, 4.6), toonMat(opts.cap));
+    brim.position.set(3.6, 5.5, 0);
     neck.add(brim);
   }
 
   // A little pistol that appears in the right hand when the figure is armed.
   const gun = new THREE.Group();
-  const gunBody = new THREE.Mesh(new THREE.BoxGeometry(11, 3.4, 2.6), basicMat(0x26262c));
-  gunBody.position.set(4.5, 0.6, 0);
-  const gunGrip = new THREE.Mesh(new THREE.BoxGeometry(3.2, 5.5, 2.4), basicMat(0x26262c));
-  gunGrip.position.set(0.5, -2.6, 0);
+  const gunBody = new THREE.Mesh(new THREE.BoxGeometry(8.5, 2.0, 1.7), basicMat(0x26262c));
+  gunBody.position.set(3.4, 0.35, 0);
+  const gunGrip = new THREE.Mesh(new THREE.BoxGeometry(2.0, 3.6, 1.6), basicMat(0x26262c));
+  gunGrip.position.set(0.3, -1.7, 0);
   gun.add(gunBody, gunGrip);
   gun.position.y = -9.6;
   gun.visible = false;
@@ -317,7 +319,7 @@ export function createFigure(opts = {}) {
     // --- Vertical: bob from the gait, sink from crouch / seat / fall. ---
     const bob = Math.abs(Math.sin(ph)) * 1.5 * gait;
     const breathe = Math.sin(time * 1.7 + fig.swaySeed) * 0.22 * (1 - gait);
-    pelvis.position.y = HIP_H + bob + breathe - c.crouch * 6.5 - c.drive * 8.5;
+    pelvis.position.y = HIP_H + bob + breathe - c.crouch * 6.5 - c.drive * 13;
     pelvis.rotation.x = Math.sin(ph * 2 + fig.swaySeed) * 0.03 * gait; // gentle roll
     pelvis.rotation.y = Math.sin(time * 0.43 + fig.swaySeed) * 0.05 * (1 - gait); // idle weight shift
 
@@ -335,7 +337,7 @@ export function createFigure(opts = {}) {
     spine.rotation.x = Math.sin(ph * 2) * 0.028 * gait;
     neck.rotation.z = 0.06 * gait + c.crouch * -0.12; // head counter-tilt keeps the face level
     neck.rotation.y = Math.sin(time * 0.31 + fig.swaySeed * 2) * 0.14 * (1 - gait) * (1 - c.aim);
-    chestBall.scale.y = 5.2 + Math.sin(time * 1.7 + fig.swaySeed) * 0.14 * (1 - gait); // breathing
+    chestBall.scale.y = 2.0 + Math.sin(time * 1.7 + fig.swaySeed) * 0.07 * (1 - gait); // breathing
 
     // --- Arms: swing opposite to the legs, elbows softly bent. ---
     let shL = sw2 * amp * 0.85;
@@ -404,7 +406,8 @@ export function createFigure(opts = {}) {
 
     // --- Whole-body fall when knocked out. ---
     tilt.rotation.x = -1.5 * easeOut(Math.min(1, c.down));
-    tilt.position.y = -2 * c.down;
+    // Seated drivers also sink at the root, so the head stays inside the cabin.
+    tilt.position.y = -2 * c.down - 5 * c.drive;
     shadow.material.opacity = 0.2 * (1 - c.drive);
   }
 
