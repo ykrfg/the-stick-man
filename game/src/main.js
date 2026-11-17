@@ -88,7 +88,7 @@ g.money = g.saveData.money ?? 0;
 g.earned = g.saveData.earned ?? 0;
 buildWorld(scene, g.city);
 
-// The hero: a white-filled stick figure with a grin, spawned outside the diner.
+// The hero: a white-headed, black-bodied stick figure with a grin, spawned outside the diner.
 const dinerDoor = g.city.landmarks.diner;
 g.player = {
   x: dinerDoor.x - 62,

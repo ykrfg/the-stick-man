@@ -8,9 +8,12 @@
 // recovery, a crouch for climbing into cars, a settled driving pose, and a relaxed
 // breathing idle. No animation assets: it is all math, and it is cheap.
 //
-// The hero is WHITE-filled with black outlines; rivals and heavies are
-// BLACK-filled. Faces are mouth-only: a small plane on the head carries one of six
-// mouth shapes (neutral, grin, angry, shout, smug, frustrated), swapped by name.
+// Per the character reference sheet there are two figure types. Hero type: ONLY
+// the head is a white-filled disc with a black outline — the torso, arms, legs,
+// hands and feet are solid black stick lines. Rival type: the whole figure,
+// head included, is solid black. Faces are mouth-only: a small plane on the head
+// carries one of six mouth shapes (neutral, grin, angry, shout, smug,
+// frustrated), swapped by name — dark shapes on the white head, light on black.
 import * as THREE from 'three';
 
 export const EXPRESSIONS = ['neutral', 'grin', 'angry', 'shout', 'smug', 'frustrated'];
@@ -124,7 +127,7 @@ function segment(radius, length, material, jointRadius) {
 
 /**
  * Build one stick figure. opts: {
- *   fill: 'white' (hero: white body, black line limbs) | 'black' (rival: all black),
+ *   fill: 'white' (hero type: white head disc, black stick body) | 'black' (rival: all black),
  *   cap: a colour for a flat cap (police officers), or null,
  *   scale: overall size multiplier.
  * }
@@ -134,7 +137,11 @@ function segment(radius, length, material, jointRadius) {
  */
 export function createFigure(opts = {}) {
   const black = opts.fill === 'black';
-  const bodyMat = toonMat(black ? INK : 0xffffff);
+  // Only the head differs between the two types: a white disc for the hero
+  // type, black for rivals. Trunk, pelvis, chest and hands are solid black
+  // stick for BOTH types, exactly like the limbs.
+  const headMat = toonMat(black ? INK : 0xffffff);
+  const bodyMat = toonMat(INK);
   const limbMat = toonMat(INK);
   // Lean proportions per the character reference sheet: limbs and torso are thin
   // line-like strokes, and the round head is about a fifth of the total height.
@@ -160,7 +167,6 @@ export function createFigure(opts = {}) {
   const pelvisBall = new THREE.Mesh(sphereGeo, bodyMat);
   pelvisBall.scale.set(2.1, 1.8, 2.1);
   pelvis.add(pelvisBall);
-  if (!black) outline(pelvisBall, 1.3);
 
   // Legs: hip pivot -> thigh -> knee pivot -> shin -> foot.
   function makeLeg(side) {
@@ -190,29 +196,29 @@ export function createFigure(opts = {}) {
   torso.scale.set(1.3, 10.5, 1.3);
   torso.position.y = 5.2;
   spine.add(torso);
-  if (!black) outline(torso, 1.3);
   const chestBall = new THREE.Mesh(sphereGeo, bodyMat);
   chestBall.scale.set(2.3, 2.0, 2.3);
   chestBall.position.y = 10.4;
   spine.add(chestBall);
-  if (!black) outline(chestBall, 1.25);
 
   // Arms: shoulder pivot -> upper arm -> elbow pivot -> forearm -> hand.
+  // Segment lengths are tuned to the reference sheet: a relaxed arm hangs to
+  // about mid-thigh (upper 8.2 + forearm/hand 7.9 from the shoulder), not to
+  // the knees as the first, longer rig did.
   function makeArm(side) {
     const shoulder = new THREE.Group();
     shoulder.position.set(0, 9.8, side * 2.0);
-    const upper = segment(limbR, 10, limbMat, limbR * 1.05);
+    const upper = segment(limbR, 8.2, limbMat, limbR * 1.05);
     shoulder.add(upper);
     const elbow = new THREE.Group();
-    elbow.position.y = -10;
+    elbow.position.y = -8.2;
     upper.add(elbow);
-    const fore = segment(limbR * 0.88, 9, limbMat, 0);
+    const fore = segment(limbR * 0.88, 7.4, limbMat, 0);
     elbow.add(fore);
-    const hand = new THREE.Mesh(sphereGeo, black ? limbMat : bodyMat);
+    const hand = new THREE.Mesh(sphereGeo, limbMat);
     hand.scale.setScalar(1.6);
-    hand.position.y = -9.6;
+    hand.position.y = -7.9;
     fore.add(hand);
-    if (!black) outline(hand, 1.25);
     spine.add(shoulder);
     return { shoulder, elbow, fore, hand };
   }
@@ -223,7 +229,7 @@ export function createFigure(opts = {}) {
   const neck = new THREE.Group();
   neck.position.y = 12.6;
   spine.add(neck);
-  const head = new THREE.Mesh(sphereGeo, bodyMat);
+  const head = new THREE.Mesh(sphereGeo, headMat);
   head.scale.setScalar(4.1);
   head.position.set(0.5, 3.0, 0);
   neck.add(head);
@@ -258,7 +264,7 @@ export function createFigure(opts = {}) {
   const gunGrip = new THREE.Mesh(new THREE.BoxGeometry(2.0, 3.6, 1.6), basicMat(0x26262c));
   gunGrip.position.set(0.3, -1.7, 0);
   gun.add(gunBody, gunGrip);
-  gun.position.y = -9.6;
+  gun.position.y = -7.9;
   gun.visible = false;
   armR.fore.add(gun);
 
