@@ -1,8 +1,10 @@
-// The 3D city of Palmera, built from the data in city.js: flat toon-shaded box
-// buildings with roof slabs and name sprites on the landmarks, dark road planes
-// with painted dashes, sidewalks, a park, a beach with a pier, palms and lamps.
-// Everything is procedural geometry in bright flat colours — a sunny diorama, never
-// realistic. World data coordinates (x, y) map to 3D as (x, height, y).
+// The 3D city of Palmera, built from the data in city.js: toon-shaded buildings
+// whose facades are painted on canvas (window grids with frames and lit panes,
+// ground-floor storefronts, doors), with parapet roofs, rooftop props, awnings
+// on the landmarks and a few fire escapes; dark road planes with painted dashes,
+// sidewalks, a park, a beach with a pier, palms and lamps. Everything is
+// procedural in bright flat colours — a sunny diorama, never realistic.
+// World data coordinates (x, y) map to 3D as (x, height, y).
 import * as THREE from 'three';
 import { COLORS, ROAD, WORLD } from './config.js';
 import { toonMat, basicMat, toonGradient } from './stick3d.js';
@@ -60,6 +62,216 @@ function flatPlane(w, h, material) {
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), material);
   mesh.rotation.x = -Math.PI / 2;
   return mesh;
+}
+
+/** Deterministic 0..1 hash from a number, so facades are stable between runs. */
+function hash01(n) {
+  const s = Math.sin(n * 127.1 + 311.7) * 43758.5453123;
+  return s - Math.floor(s);
+}
+
+/** A THREE.Color shade of a hex string, scaled by f (1 = unchanged). */
+function shade(hex, f) {
+  const c = new THREE.Color(hex);
+  c.r = Math.min(1, c.r * f);
+  c.g = Math.min(1, c.g * f);
+  c.b = Math.min(1, c.b * f);
+  return `#${c.getHexString()}`;
+}
+
+/** Flat roof tones a parapet cap can wear, besides the building's own wall colour. */
+const ROOF_TONES = ['#8d7d6b', '#a1887f', '#7d8a96', '#b08968', '#6f7d7a', '#96826f'];
+
+/**
+ * Paint one building face onto a canvas: the wall colour with a subtly striped
+ * bay rhythm, a window grid with frames (some panes lit, some reflecting the
+ * sky), floor separator lines, and a ground floor — a glazed storefront with a
+ * sign band for named buildings, larger windows and a door for plain ones.
+ * Returns { map, glow } textures; glow is black except for the lit panes, for
+ * use as an emissive map. faceWidth is the face's width in world units.
+ */
+function makeFacadeTextures(b, faceWidth, hgt, salt) {
+  const S = 192;
+  const canvas = document.createElement('canvas');
+  canvas.width = S;
+  canvas.height = S;
+  const ctx = canvas.getContext('2d');
+  const glowCanvas = document.createElement('canvas');
+  glowCanvas.width = S;
+  glowCanvas.height = S;
+  const glow = glowCanvas.getContext('2d');
+  glow.fillStyle = '#000000';
+  glow.fillRect(0, 0, S, S);
+
+  const wall = b.roof; // the bright facade colour this building already wears
+  const trim = b.wall; // its deeper partner colour: frames, bands, parapet
+  const seed = b.x * 3.7 + b.y * 9.1 + salt * 57.3;
+  const rnd = (k) => hash01(seed + k * 13.73);
+
+  ctx.fillStyle = wall;
+  ctx.fillRect(0, 0, S, S);
+  // A whisper of per-building tint variation.
+  ctx.fillStyle = rnd(1) > 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)';
+  ctx.fillRect(0, 0, S, S);
+
+  const floors = Math.max(2, Math.min(5, Math.round(hgt / 27)));
+  const groundFrac = Math.max(0.24, Math.min(0.44, 34 / hgt));
+  const groundH = S * groundFrac;
+  const upperH = S - groundH;
+  const bandH = upperH / (floors - 1);
+  const cols = Math.max(2, Math.min(8, Math.round(faceWidth / 30)));
+  const cellW = S / cols;
+
+  // Vertical bay striping behind the windows.
+  for (let c = 0; c < cols; c += 1) {
+    if (c % 2 === 0) continue;
+    ctx.fillStyle = 'rgba(0,0,0,0.055)';
+    ctx.fillRect(c * cellW, 0, cellW, S);
+  }
+  // Cornice line under the roof and a separator at every floor.
+  ctx.fillStyle = 'rgba(0,0,0,0.20)';
+  ctx.fillRect(0, 0, S, 5);
+  ctx.fillStyle = 'rgba(0,0,0,0.13)';
+  for (let f = 1; f < floors - 1; f += 1) ctx.fillRect(0, f * bandH, S, 3);
+  ctx.fillRect(0, upperH, S, 4);
+
+  const glassTones = ['#bfe3f2', '#8fc3dd', '#5d84a0', '#3c5a68'];
+  function windowPane(x, y, w, h, k) {
+    ctx.fillStyle = shade(trim, 0.72);
+    ctx.fillRect(x - 2.5, y - 2.5, w + 5, h + 5);
+    const r = rnd(k);
+    if (r < 0.30) {
+      ctx.fillStyle = '#ffd98c'; // lit from inside
+      glow.fillStyle = '#ffbe78';
+      glow.fillRect(x, y, w, h);
+    } else {
+      ctx.fillStyle = glassTones[Math.floor(rnd(k + 40) * glassTones.length)];
+    }
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = 'rgba(255,255,255,0.20)';
+    ctx.fillRect(x, y, w, 2.5); // sill highlight
+    if (w > 15) { // a mullion cross on wider panes
+      ctx.fillStyle = 'rgba(0,0,0,0.22)';
+      ctx.fillRect(x + w / 2 - 1, y, 2, h);
+    }
+  }
+
+  // Upper floors: the window grid.
+  for (let f = 0; f < floors - 1; f += 1) {
+    const bandY = f * bandH;
+    const wh = bandH * 0.52;
+    const wy = bandY + (bandH - wh) / 2;
+    for (let c = 0; c < cols; c += 1) {
+      if (rnd(f * 31 + c * 7) < 0.07) continue; // the odd blank bay
+      const ww = cellW * 0.5;
+      windowPane(c * cellW + (cellW - ww) / 2, wy, ww, wh, f * 100 + c);
+    }
+  }
+
+  // Ground floor.
+  const gy = upperH;
+  ctx.fillStyle = 'rgba(0,0,0,0.10)';
+  ctx.fillRect(0, gy, S, groundH);
+  if (b.name) {
+    // Storefront: a sign band over wide glazed panels and a framed door.
+    const signH = groundH * 0.30;
+    ctx.fillStyle = shade(trim, 0.82);
+    ctx.fillRect(0, gy, S, signH);
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.fillRect(0, gy + signH - 4, S, 2.5);
+    const panels = Math.max(2, Math.round(faceWidth / 46));
+    const pw = S / panels;
+    const doorAt = Math.floor(rnd(77) * panels);
+    for (let p = 0; p < panels; p += 1) {
+      const px = p * pw + 4;
+      const py = gy + signH + 5;
+      const pwid = pw - 8;
+      const ph = groundH - signH - 9;
+      ctx.fillStyle = shade(trim, 0.72);
+      ctx.fillRect(px - 2, py - 2, pwid + 4, ph + 4);
+      if (p === doorAt) {
+        ctx.fillStyle = shade(trim, 1.05);
+        ctx.fillRect(px, py, pwid, ph);
+        ctx.fillStyle = '#ffd98c';
+        ctx.fillRect(px + pwid - 8, py + ph * 0.45, 4, 4); // handle
+        glow.fillStyle = '#7a5a30';
+        glow.fillRect(px + pwid - 8, py + ph * 0.45, 4, 4);
+      } else {
+        ctx.fillStyle = rnd(p + 90) < 0.35 ? '#ffd98c' : '#a8d4ea';
+        ctx.fillRect(px, py, pwid, ph);
+        if (rnd(p + 90) < 0.35) {
+          glow.fillStyle = '#e8a95e';
+          glow.fillRect(px, py, pwid, ph);
+        }
+        ctx.fillStyle = 'rgba(255,255,255,0.25)';
+        ctx.fillRect(px, py, pwid, 4);
+      }
+    }
+  } else {
+    // Plain ground floor: larger windows and a door on wider faces.
+    const doorCol = faceWidth >= 90 ? Math.floor(rnd(78) * cols) : -1;
+    for (let c = 0; c < cols; c += 1) {
+      const cx = c * cellW;
+      if (c === doorCol) {
+        const dw = cellW * 0.52;
+        const dx = cx + (cellW - dw) / 2;
+        ctx.fillStyle = shade(trim, 0.72);
+        ctx.fillRect(dx - 2.5, gy + 5, dw + 5, groundH - 5);
+        ctx.fillStyle = shade(trim, 1.1);
+        ctx.fillRect(dx, gy + 7, dw, groundH - 7);
+        ctx.fillStyle = '#ffd98c';
+        ctx.fillRect(dx + dw - 7, gy + groundH * 0.5, 3.5, 3.5);
+      } else {
+        const ww = cellW * 0.58;
+        const wh = groundH * 0.55;
+        windowPane(cx + (cellW - ww) / 2, gy + (groundH - wh) / 2, ww, wh, 500 + c);
+      }
+    }
+  }
+  // Plinth line at the pavement.
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.fillRect(0, S - 4, S, 4);
+
+  const map = new THREE.CanvasTexture(canvas);
+  map.anisotropy = 4;
+  const glowTex = new THREE.CanvasTexture(glowCanvas);
+  return { map, glow: glowTex };
+}
+
+/** The direction ('n'|'s'|'e'|'w') from a building toward its nearest road. */
+function frontDir(b) {
+  const cx = b.x + b.w / 2;
+  const cy = b.y + b.h / 2;
+  let best = { d: Infinity, dir: 's' };
+  for (const a of ROAD.avenues) {
+    const d = Math.abs(cx - a);
+    if (d < best.d) best = { d, dir: cx < a ? 'e' : 'w' };
+  }
+  for (const s of ROAD.streets) {
+    const d = Math.abs(cy - s);
+    if (d < best.d) best = { d, dir: cy < s ? 's' : 'n' };
+  }
+  return best.dir;
+}
+
+/** Shared striped awning textures, one per trim colour. */
+const awningTexCache = new Map();
+function awningMaterial(trimHex) {
+  if (!awningTexCache.has(trimHex)) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 16;
+    const ctx = canvas.getContext('2d');
+    for (let i = 0; i < 8; i += 1) {
+      ctx.fillStyle = i % 2 === 0 ? '#f7f3df' : trimHex;
+      ctx.fillRect(i * 8, 0, 8, 16);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.repeat.set(3, 1);
+    awningTexCache.set(trimHex, new THREE.MeshToonMaterial({ map: tex, gradientMap: toonGradient() }));
+  }
+  return awningTexCache.get(trimHex);
 }
 
 /**
@@ -134,18 +346,131 @@ export function buildWorld(scene, city) {
     }
   }
 
-  // Buildings: a toon box, a darker roof slab, and a name sprite when named.
+  // Buildings: a box wearing painted canvas facades (window grids, storefronts,
+  // doors), a parapet slab, a varied flat roof, rooftop props on some, an
+  // awning and step for the named landmarks, a fire escape on a few tall
+  // blocks, and a floating name sprite when named. Footprints are unchanged,
+  // so collision data in city.js still matches what is drawn.
+  const roofMats = ROOF_TONES.map((t) => toonMat(new THREE.Color(t).getHex()));
+  const acMat = toonMat(0xcfd4d8);
+  const acTopMat = toonMat(0x9aa1a6);
+  const towerMat = toonMat(0xa97c50);
+  const towerRoofMat = toonMat(0x707880);
+  const metalMat = toonMat(0x3a3f46);
+  const stepMat = toonMat(0xcac2ae);
   for (const b of city.buildings) {
     const hgt = b.height * 1.9;
-    const box = new THREE.Mesh(new THREE.BoxGeometry(b.w, hgt, b.h), toonMat(new THREE.Color(b.roof).getHex()));
-    box.position.set(b.x + b.w / 2, hgt / 2, b.y + b.h / 2);
+    const cx = b.x + b.w / 2;
+    const cz = b.y + b.h / 2;
+    const seed = b.x * 3.7 + b.y * 9.1;
+    const wide = makeFacadeTextures(b, b.w, hgt, 1);
+    const narrow = makeFacadeTextures(b, b.h, hgt, 2);
+    const faceMat = (t) => new THREE.MeshToonMaterial({
+      map: t.map, emissiveMap: t.glow, emissive: 0xffc98a, emissiveIntensity: 0.55,
+      gradientMap: toonGradient(),
+    });
+    const roofMat = hash01(seed + 5) < 0.55
+      ? roofMats[Math.floor(hash01(seed + 6) * roofMats.length)]
+      : toonMat(new THREE.Color(b.wall).getHex());
+    const narrowMat = faceMat(narrow);
+    const wideMat = faceMat(wide);
+    const box = new THREE.Mesh(
+      new THREE.BoxGeometry(b.w, hgt, b.h),
+      [narrowMat, narrowMat, roofMat, roofMat, wideMat, wideMat],
+    );
+    box.position.set(cx, hgt / 2, cz);
     group.add(box);
+    // Parapet: the familiar cap slab, in the building's trim colour, with a
+    // slightly inset roof deck on top wearing a varied flat roof tone.
     const slab = new THREE.Mesh(new THREE.BoxGeometry(b.w + 6, 5, b.h + 6), toonMat(new THREE.Color(b.wall).getHex()));
-    slab.position.set(b.x + b.w / 2, hgt + 2.5, b.y + b.h / 2);
+    slab.position.set(cx, hgt + 2.5, cz);
     group.add(slab);
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(Math.max(10, b.w - 12), 2, Math.max(10, b.h - 12)), roofMat);
+    deck.position.set(cx, hgt + 6, cz);
+    group.add(deck);
+
+    // Rooftop props, hash-picked: a water tower on some tall blocks, an AC
+    // unit or a vent pipe on others. They sit on the roof deck (top hgt+7).
+    const propR = hash01(seed + 11);
+    const offX = (hash01(seed + 12) - 0.5) * Math.max(0, b.w - 44);
+    const offZ = (hash01(seed + 13) - 0.5) * Math.max(0, b.h - 44);
+    if (hgt > 62 && propR < 0.30) {
+      const tower = new THREE.Group();
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(7.5, 7.5, 13, 10), towerMat);
+      tank.position.y = 12.5;
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(9, 6, 10), towerRoofMat);
+      cone.position.y = 22;
+      const stand = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.8, 6, 8), metalMat);
+      stand.position.y = 3;
+      tower.add(tank, cone, stand);
+      tower.position.set(cx + offX, hgt + 7, cz + offZ);
+      group.add(tower);
+    } else if (propR < 0.62) {
+      const ac = new THREE.Mesh(new THREE.BoxGeometry(15, 7, 11), acMat);
+      ac.position.set(cx + offX, hgt + 10.5, cz + offZ);
+      const acTop = new THREE.Mesh(new THREE.BoxGeometry(11, 1.8, 8), acTopMat);
+      acTop.position.set(cx + offX, hgt + 14.9, cz + offZ);
+      group.add(ac, acTop);
+    } else if (propR < 0.78) {
+      const vent = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 7, 8), acTopMat);
+      vent.position.set(cx + offX, hgt + 10.5, cz + offZ);
+      group.add(vent);
+    }
+
+    // Fire escape on a few tall plain blocks: stacked platforms on the east
+    // face with diagonal stairs, in dark metal. Lowest platform is above the
+    // collision push-out distance, so nobody clips it at street level.
+    if (!b.name && hgt >= 74 && hash01(seed + 21) < 0.30) {
+      const floors = Math.max(2, Math.min(5, Math.round(hgt / 27)));
+      const platW = Math.min(b.h * 0.5, 64);
+      const platGeo = new THREE.BoxGeometry(7, 1.6, platW);
+      let prev = null;
+      for (let f = 1; f < floors; f += 1) {
+        const py = f * 27 - 5;
+        const plat = new THREE.Mesh(platGeo, metalMat);
+        plat.position.set(b.x + b.w + 3.5, py, cz + (f % 2 === 0 ? -platW / 4 : platW / 4));
+        group.add(plat);
+        if (prev) {
+          const dz = plat.position.z - prev.position.z;
+          const dy = py - prev.position.y;
+          const len = Math.hypot(dz, dy);
+          const stair = new THREE.Mesh(new THREE.BoxGeometry(5, 1.2, len), metalMat);
+          stair.position.set(b.x + b.w + 3.5, (py + prev.position.y) / 2, (plat.position.z + prev.position.z) / 2);
+          stair.rotation.x = -Math.atan2(dy, dz);
+          group.add(stair);
+        }
+        prev = { position: plat.position, y: py };
+      }
+    }
+
+    // Named landmarks get a striped awning over the storefront on the face
+    // toward the nearest road, and a shallow entrance step below it.
     if (b.name) {
+      const dir = frontDir(b);
+      const out = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] }[dir];
+      const faceLen = dir === 'n' || dir === 's' ? b.w : b.h;
+      const faceDist = dir === 'n' || dir === 's' ? b.h / 2 : b.w / 2;
+      const awnLen = Math.min(faceLen * 0.62, 120);
+      // A yawed group whose local +z points out of the facade; inside it the
+      // awning slab tilts down away from the wall.
+      const awnGroup = new THREE.Group();
+      awnGroup.position.set(cx + out[0] * faceDist, 35, cz + out[1] * faceDist);
+      awnGroup.rotation.y = Math.atan2(out[0], out[1]);
+      const awning = new THREE.Mesh(new THREE.BoxGeometry(awnLen, 1.7, 11), awningMaterial(b.wall));
+      awning.position.z = 4.6;
+      awning.rotation.x = 0.42;
+      awnGroup.add(awning);
+      group.add(awnGroup);
+      const step = new THREE.Mesh(new THREE.BoxGeometry(30, 1.6, 7), stepMat);
+      step.position.set(
+        cx + out[0] * ((dir === 'e' || dir === 'w' ? b.w / 2 : 0) + 2.6),
+        0.8,
+        cz + out[1] * ((dir === 'n' || dir === 's' ? b.h / 2 : 0) + 2.6),
+      );
+      if (dir === 'e' || dir === 'w') step.rotation.y = Math.PI / 2;
+      group.add(step);
       const label = makeTextSprite(b.name, { size: 40, scale: 0.9 });
-      label.position.set(b.x + b.w / 2, hgt + 30, b.y + b.h / 2);
+      label.position.set(cx, hgt + 30, cz);
       group.add(label);
     }
   }
