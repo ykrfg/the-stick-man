@@ -81,6 +81,12 @@ function baseCar(kind, x, y, angle, colorHex) {
     lightR: mesh.lightR,
     occupant: null, // 'player', a ped object, or null
     hp: 100,
+    // Player ownership: once the player takes a car it is theirs — the fleet
+    // systems (traffic lane-following/despawn, police chase/drive-off) must
+    // never touch it again. `wrecked` is the terminal state of a car beaten
+    // to hp <= 0 while the player drove it: it never moves again.
+    touched: false,
+    wrecked: false,
     // Traffic state (lane following):
     axis: 'y', road: 0, dir: 1, lane: 0, turnCd: 0,
     // Police state:
@@ -91,8 +97,19 @@ function baseCar(kind, x, y, angle, colorHex) {
 
 /** Place the car's mesh from its logical (x, y, angle) and spin its wheels. */
 export function syncCarMesh(car, dt) {
-  car.mesh.position.set(car.x, 0, car.y);
+  // Sanitize first: one bad frame (a NaN slipped into the physics) must never
+  // leave a car permanently invisible — a non-finite transform renders as
+  // nothing at all, which reads to the player as "my car vanished".
+  if (!Number.isFinite(car.x) || !Number.isFinite(car.y)) {
+    car.x = 1600;
+    car.y = 1260;
+  }
+  if (!Number.isFinite(car.angle)) car.angle = 0;
+  if (!Number.isFinite(car.speed)) car.speed = 0;
+  // A wreck sits low and tilted, so it reads as a dead car, not a good one.
+  car.mesh.position.set(car.x, car.wrecked ? -1.4 : 0, car.y);
   car.mesh.rotation.y = -car.angle;
+  car.mesh.rotation.z = car.wrecked ? 0.07 : 0;
   car.wheelSpin += (car.speed * dt) / 5.6;
   for (const wheel of car.wheels) wheel.rotation.z = -car.wheelSpin;
 }
@@ -178,6 +195,11 @@ export function removeCar(g, car) {
  * bumps and pedestrian run-overs (reported through g.events for main.js to judge).
  */
 export function moveFreeCar(g, car, dt) {
+  if (car.wrecked) {
+    car.speed = 0;
+    syncCarMesh(car, dt);
+    return;
+  }
   const prevSpeed = car.speed;
   car.x += Math.cos(car.angle) * car.speed * dt;
   car.y += Math.sin(car.angle) * car.speed * dt;
@@ -202,6 +224,14 @@ export function moveFreeCar(g, car, dt) {
     if (other.kind !== 'parked' || Math.abs(car.speed) > 200) {
       other.x -= (dx / d) * push * 0.5;
       other.y -= (dy / d) * push * 0.5;
+      // A shoved car must stay consistent: kept inside the world, resolved
+      // out of any building it was pushed into, and with its mesh where its
+      // body actually is. Parked cars otherwise never re-sync after spawn,
+      // so a pushed one used to leave its visible mesh behind at the old
+      // spot while the real car sat somewhere else, invisible.
+      clampToWorld(other, 30);
+      resolveCircleCollision(g.city, other, CAR.radius);
+      syncCarMesh(other, 0);
     }
     if (Math.abs(car.speed) > 170) {
       g.events.push({ type: 'crash', strength: 0.7, byPlayer: car.occupant === 'player' });
@@ -224,7 +254,7 @@ export function moveFreeCar(g, car, dt) {
 /** The player's driving: arcade acceleration, braking, steering and drag. */
 export function drivePlayerCar(g, dt) {
   const car = g.player.car;
-  if (!car) return;
+  if (!car || car.wrecked) return;
   const axes = g.input.axes();
   const throttle = -axes.y;
   const steer = axes.x;
@@ -249,8 +279,14 @@ export function drivePlayerCar(g, dt) {
 
 /** Traffic: follow the lane, slow for the car ahead, sometimes turn at crossings. */
 export function updateTraffic(g, dt) {
-  for (const car of g.cars) {
+  for (const car of [...g.cars]) {
     if (car.kind !== 'traffic') continue;
+    // A car the player has taken is theirs: never lane-drive it out from
+    // under them and never despawn it. finishEnterCar already converts its
+    // kind away from 'traffic'; this is the belt-and-braces check so no
+    // path (a scramble interrupted mid-enter, a scene seating) can ever
+    // hand an occupied or player-owned car to the fleet logic.
+    if (car.touched || car.occupant === 'player' || car.wrecked) continue;
     // Despawn far-away traffic and respawn it elsewhere, keeping the city alive.
     const distToPlayer = Math.hypot(car.x - g.player.x, car.y - g.player.y);
     if (distToPlayer > 1500) {

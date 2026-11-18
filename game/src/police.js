@@ -121,8 +121,12 @@ export function updatePolice(g, dt, time) {
     g.coolT = 0;
   }
 
-  // Maintain the fleet: one car per star, up to four.
-  const policeCars = g.cars.filter((c) => c.kind === 'police');
+  // Maintain the fleet: one car per star, up to four. A police car the
+  // player has taken is no longer a unit: it must never chase its own
+  // driver, count toward the fleet, or drive off and despawn with the
+  // player in it. (finishEnterCar converts its kind too; this filter is
+  // the second lock on the same door.)
+  const policeCars = g.cars.filter((c) => c.kind === 'police' && !c.touched && c.occupant !== 'player');
   const desired = g.stars === 0 ? 0 : Math.min(4, g.stars);
   g.policeSpawnCd -= dt;
   if (policeCars.length < desired && g.policeSpawnCd <= 0) {

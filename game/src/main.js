@@ -13,7 +13,7 @@ import { clearSave, hasProgress, loadSave, storeSave } from './save.js';
 import { buildCity } from './city.js';
 import { buildWorld } from './world3d.js';
 import { createFigure } from './stick3d.js';
-import { drivePlayerCar, spawnParkedCars, spawnTrafficCar, updateTraffic } from './vehicles.js';
+import { drivePlayerCar, spawnParkedCars, spawnTrafficCar, syncCarMesh, updateTraffic } from './vehicles.js';
 import { hurtPed, seatDriverFigure, spawnPeds, syncFigure, updatePeds, updatePlayerOnFoot } from './people.js';
 import { spawnCashPickup, updateBullets, updateCombat, updatePickups } from './combat.js';
 import { addHeat, updatePolice } from './police.js';
@@ -245,7 +245,7 @@ function nearestEnterableCar() {
   let best = null;
   let bestD = 56;
   for (const car of g.cars) {
-    if (car.occupant === 'player') continue;
+    if (car.occupant === 'player' || car.wrecked) continue;
     const d = Math.hypot(car.x - p.x, car.y - p.y);
     if (d < bestD) {
       bestD = d;
@@ -277,6 +277,28 @@ function finishEnterCar() {
   p.state = 'car';
   p.car = car;
   car.occupant = 'player';
+  // The car is the player's now — and the fleet systems key off `kind`:
+  // traffic cars lane-drive themselves and despawn at range, police cars
+  // chase their target and drive off to despawn when the heat dies. A taken
+  // car therefore leaves its fleet here, at the one moment ownership
+  // changes: traffic/police cars become free cars, and traffic gets a
+  // replacement so the city stays alive. Without this, a stolen traffic car
+  // fought its driver with lane-following the whole drive, drove itself
+  // away the moment he stepped out, and then despawned — the "my car
+  // disappeared" bug, up to and including while he was using it.
+  if (!car.touched) {
+    car.touched = true;
+    if (car.kind === 'traffic') {
+      car.kind = 'parked';
+      spawnTrafficCar(g);
+    } else if (car.kind === 'police') {
+      car.kind = 'parked';
+      if (car.lightL && car.lightR) {
+        car.lightL.visible = true;
+        car.lightR.visible = true;
+      }
+    }
+  }
   p.fig.target.crouch = 0;
   g.events.push({ type: 'crime', kind: 'stealCar', x: car.x, y: car.y });
   g.sfx.carDoor();
@@ -327,6 +349,7 @@ function doWasted() {
 /** After busted/wasted: back on the street with full health, heat gone. */
 function respawn() {
   const p = g.player;
+  g.transition = null; // a scramble interrupted by a bust must not seat him later
   g.cam.init = false; // teleport: the free camera re-seats behind the hero
   const wasBusted = g.state === 'busted';
   if (p.car) {
@@ -381,8 +404,18 @@ function processEvents() {
       case 'npcpunch': {
         g.sfx.punch();
         if (ev.targetCar && p.car) {
-          p.car.hp -= 6;
-          if (p.car.hp <= 0) {
+          p.car.hp = Math.max(0, p.car.hp - 6);
+          if (p.car.hp <= 0 && !p.car.wrecked) {
+            // The car becomes a wreck in place: marked, tilted, unenterable,
+            // and — being player-owned since it was taken — never cleaned
+            // up, never driven away by a fleet system. (A car at stale low
+            // hp, e.g. one the player softened up before stealing it, can
+            // still reach this in a single hit; the car HP bar on the HUD
+            // is the warning, and the Spray 'n Go bay is the way back for
+            // damage short of this.)
+            p.car.wrecked = true;
+            p.car.speed = 0;
+            syncCarMesh(p.car, 0);
             exitCar();
             p.hp = Math.min(p.hp, 35);
             g.say('WRECKED!', 'Your ride is done. On your feet, stick.', 3);
