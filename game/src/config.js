@@ -82,3 +82,13 @@ export const SPRAY_PER_STAR = 40;
 /** Recovery prices: a full-heal meal at Bruno's Diner, treatment at St. Palm. */
 export const MEAL_PRICE = 25;
 export const TREAT_PRICE = 40;
+
+/**
+ * Store hold-ups: stand in a shop's door zone this long to empty its till.
+ * The payout is rolled per robbery ($70–130, see main.js); the heat is a
+ * witnessed crime by definition — two stars' worth. A robbed shop's till
+ * stays empty for ROBBERY_COOLDOWN seconds of game time.
+ */
+export const ROBBERY_TIME = 2.5;
+export const ROBBERY_HEAT = 100;
+export const ROBBERY_COOLDOWN = 240;

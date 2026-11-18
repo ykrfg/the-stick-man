@@ -5,7 +5,7 @@
 // the run's start, busted and wasted flows. In ?shot= mode it instead poses one
 // of the deterministic screenshot scenes from shots.js.
 import * as THREE from 'three';
-import { CAR, HEAT_FOR, MEAL_PRICE, PLAYER, SPRAY_PER_STAR, TREAT_PRICE } from './config.js';
+import { CAR, HEAT_FOR, MEAL_PRICE, PLAYER, ROBBERY_COOLDOWN, ROBBERY_HEAT, ROBBERY_TIME, SPRAY_PER_STAR, TREAT_PRICE } from './config.js';
 import { makeRng } from './random.js';
 import { Input } from './input.js';
 import { SoundFX } from './audio.js';
@@ -76,6 +76,8 @@ const g = {
   aimAngle: null,
   transition: null,
   garageT: 0,
+  robbery: null, // { shop, t } while a hold-up is being stood through
+  robbedAt: {}, // shop index -> g.time of its last completed hold-up
   shake: 0,
   lastFine: 0,
   // Progress-reset confirm state (title / pause): the first R press or
@@ -338,6 +340,7 @@ function doBusted() {
   g.heat = 0;
   g.stars = 0;
   g.bustProgress = 0;
+  g.robbery = null; // a hold-up in progress dies with the run's flow
   failMission(g);
   g.state = 'busted';
   g.sfx.hurt();
@@ -350,6 +353,7 @@ function doWasted() {
   g.money = Math.max(0, g.money - 80);
   g.heat = 0;
   g.stars = 0;
+  g.robbery = null; // a hold-up in progress dies with the run's flow
   failMission(g);
   g.state = 'wasted';
   g.sfx.hurt();
@@ -462,6 +466,47 @@ function processEvents() {
   g.events.length = 0;
 }
 
+/** Index of the shop whose doorstep zone the player is standing in, or -1. */
+function shopDoorIndex(p) {
+  for (let i = 0; i < g.city.shops.length; i += 1) {
+    const s = g.city.shops[i];
+    if (Math.hypot(p.x - s.x, p.y - s.y) < 62) return i;
+  }
+  return -1;
+}
+
+/**
+ * A story collection or an odd-job collection owns this shop's door right
+ * now: the mission takes the door, and a hold-up there could tangle the
+ * collection's fight — so robbery simply waits its turn.
+ */
+function shopBusy(i) {
+  const m = g.mission;
+  if (m.active && m.index === 2 && m.shopStep === i) return true;
+  const j = g.job;
+  return !!(j && j.active && j.type === 'collection' && j.shopIndex === i);
+}
+
+/** Seconds until this shop can be held up again (0 = fair game). */
+function robCooldownLeft(i) {
+  const at = g.robbedAt[i];
+  return at === undefined ? 0 : Math.max(0, ROBBERY_COOLDOWN - (g.time - at));
+}
+
+/** The till empties: payout, the law, and the shop's cooldown all land at once. */
+function finishRobbery(i) {
+  const shop = g.city.shops[i];
+  const payout = 5 * g.rng.int(14, 26); // $70–130
+  g.money += payout;
+  g.earned += payout;
+  g.robbedAt[i] = g.time;
+  g.events.push({ type: 'cash', amount: payout });
+  // Seen by definition — the keeper is staring straight at you.
+  addHeat(g, ROBBERY_HEAT, shop.x, shop.y, { force: true });
+  g.say('HELD UP!', `${shop.name} emptied the till. +$${payout} — now RUN.`, 3.4);
+  persist();
+}
+
 /** Compute the interaction prompt and the spray-garage service for this frame. */
 function updateInteractions(dt) {
   const p = g.player;
@@ -469,12 +514,41 @@ function updateInteractions(dt) {
   if (g.transition) return;
   if (p.state === 'foot') {
     const L = g.city.landmarks;
+    if (g.robbery) {
+      // A hold-up in progress owns the prompt line: stand in the door
+      // zone and watch it fill. Walking off is always an option — the
+      // payout is forfeit, and that is the whole of the punishment.
+      const r = g.robbery;
+      const shop = g.city.shops[r.shop];
+      if (!shop || Math.hypot(p.x - shop.x, p.y - shop.y) > 84) {
+        g.robbery = null;
+        g.say('HOLD-UP OFF', 'You bailed. No payout, no hard feelings.', 2.4);
+      } else {
+        r.t += dt;
+        const pct = Math.min(100, Math.floor((r.t / ROBBERY_TIME) * 100));
+        g.prompt = `Holding up ${shop.name}… ${pct}% — stay put!`;
+        if (r.t >= ROBBERY_TIME) {
+          g.robbery = null;
+          finishRobbery(r.shop);
+        }
+      }
+      return;
+    }
     if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
       g.prompt = 'E — Talk to Bruno';
     } else if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
       g.prompt = `E — Eat at Bruno's ($${MEAL_PRICE}) — restores health`;
     } else if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
       g.prompt = `E — Get treated at St. Palm ($${TREAT_PRICE}) — restores health`;
+    } else if (shopDoorIndex(p) >= 0) {
+      const si = shopDoorIndex(p);
+      if (shopBusy(si)) {
+        // The mission owns this door: no robbery prompt, no note.
+      } else if (robCooldownLeft(si) > 0) {
+        g.prompt = `${g.city.shops[si].name} — recently hit, the till is empty.`;
+      } else {
+        g.prompt = `E — Hold up ${g.city.shops[si].name}`;
+      }
     } else if (nearestEnterableCar()) {
       g.prompt = 'E — Steal car';
     }
@@ -549,6 +623,7 @@ function handleInteract() {
   const p = g.player;
   if (g.transition) return;
   if (p.state === 'foot') {
+    if (g.robbery) return; // E does nothing while a hold-up is being stood through
     const L = g.city.landmarks;
     if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
       // Story work first: odd jobs only exist once no story job does, so
@@ -563,6 +638,12 @@ function handleInteract() {
     }
     if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
       healAt('ST. PALM', TREAT_PRICE, 'Patched up and sent on your way.', 'No cash, no care — the desk nurse shakes her head.');
+      return;
+    }
+    const si = shopDoorIndex(p);
+    if (si >= 0 && !shopBusy(si) && robCooldownLeft(si) <= 0) {
+      g.robbery = { shop: si, t: 0 };
+      g.say('HOLD-UP!', `"Hands where I can see them!" ${g.city.shops[si].name} is being robbed.`, 2.2);
       return;
     }
     const car = nearestEnterableCar();

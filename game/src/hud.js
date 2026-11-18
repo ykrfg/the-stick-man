@@ -189,6 +189,7 @@ function drawTitleMobile(g, ctx) {
     'DASH — burst of speed on foot',
     "Heal at Bruno's / St. Palm · repair at Spray 'n Go",
     'Lose the cops — hide till the stars fade',
+    'Free roam pays — odd jobs · hold up shops',
     'Steal cars. Run jobs for Bruno.',
     'Mind the stars.',
   ];
@@ -245,8 +246,8 @@ function drawTitle(g, ctx) {
     'Right-drag mouse — camera        Wheel — zoom',
     'Q (hold) — look back        P — pause        M — mute',
     "Heal: eat at Bruno's · treatment at St. Palm · repairs at Spray 'n Go",
-    'Lose the cops: break their line of sight — heat cools, stars fade.',
-    "Spray 'n Go wipes the heat instantly, for a price.",
+    "Lose the cops: break line of sight — heat cools, stars fade. Spray 'n Go wipes it, for a price.",
+    'Free roam pays: odd jobs from Bruno — or hold up a shop (E).',
     'Steal cars. Run jobs for Bruno. Mind the stars.',
   ];
   lines.forEach((line, i) => ctx.fillText(line, cx, 350 + i * 28));
