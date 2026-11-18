@@ -119,6 +119,40 @@ export function initTouch(g) {
     btnSprint.classList.toggle('on', sprintOn);
   }, { passive: false });
 
+  // --- Camera orbit: a drag that lands on the bare canvas — the free area
+  // covered by neither the stick zone nor the buttons — swings the camera.
+  // Deltas go into the shared input.orbit the desktop mouse drag also feeds.
+  // (Pinch zoom is deliberately not implemented: with the stick and buttons
+  // holding the other touches, a two-finger gesture on the free area alone
+  // proved too easy to trigger by accident.)
+  const gameCanvas = document.getElementById('game');
+  let orbitId = null;
+  let lastOX = 0;
+  let lastOY = 0;
+  gameCanvas.addEventListener('touchstart', (e) => {
+    e.preventDefault(); // also stops the synthetic mouse events (would fire the pistol)
+    if (orbitId !== null) return;
+    const t = e.changedTouches[0];
+    orbitId = t.identifier;
+    lastOX = t.clientX;
+    lastOY = t.clientY;
+  }, { passive: false });
+  gameCanvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier !== orbitId) continue;
+      input.orbit.dx += t.clientX - lastOX;
+      input.orbit.dy += t.clientY - lastOY;
+      lastOX = t.clientX;
+      lastOY = t.clientY;
+    }
+  }, { passive: false });
+  const orbitEnd = (e) => {
+    for (const t of e.changedTouches) if (t.identifier === orbitId) orbitId = null;
+  };
+  gameCanvas.addEventListener('touchend', orbitEnd);
+  gameCanvas.addEventListener('touchcancel', orbitEnd);
+
   // --- The big state button: start, continue after busted/wasted, resume. ---
   tapBtn.addEventListener('touchstart', (e) => {
     e.preventDefault();

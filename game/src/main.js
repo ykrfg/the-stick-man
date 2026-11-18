@@ -80,6 +80,13 @@ const g = {
   saveData: loadSave() ?? { money: 0, missionsDone: [], hasPistol: false, earned: 0 },
   shotMode: null,
   fixedCam: null,
+  // GTA-style free camera state (play states only; the ?shot= scenes and the
+  // title orbit never touch it). yaw/pitch orbit the hero, dist is the
+  // smoothed slant range, collDist the building-collision limit on it.
+  cam: {
+    init: false, yaw: 0, pitch: 0.42, dist: 250, zoomIdx: 2,
+    manualT: 99, collDist: 1e9, backBlend: 0, lookBack: false, occluded: false,
+  },
   say(title, sub = '', dur = 3.4) {
     g.message = { title, sub, t: dur, dur };
     statusEl.textContent = sub ? `${title}. ${sub}` : title;
@@ -111,6 +118,31 @@ g.player = {
 g.player.fig.setExpression('grin');
 scene.add(g.player.fig.group);
 
+// Hero visibility fallback: a soft ring at the hero's feet and a chevron
+// above his head, drawn through buildings (depth test off). The camera code
+// shows them only while a building actually hides the hero, so he can never
+// fully disappear behind one.
+const heroMark = new THREE.Group();
+{
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(12.5, 15.5, 28),
+    new THREE.MeshBasicMaterial({ color: 0xffd94d, transparent: true, opacity: 0.85, depthTest: false, side: THREE.DoubleSide }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.8;
+  ring.renderOrder = 999;
+  const chev = new THREE.Mesh(
+    new THREE.ConeGeometry(5.5, 11, 4),
+    new THREE.MeshBasicMaterial({ color: 0xffd94d, transparent: true, opacity: 0.9, depthTest: false }),
+  );
+  chev.rotation.x = Math.PI; // point down at the hero
+  chev.position.y = 52;
+  chev.renderOrder = 999;
+  heroMark.add(ring, chev);
+  heroMark.visible = false;
+  scene.add(heroMark);
+}
+
 spawnParkedCars(g);
 for (let i = 0; i < 7; i += 1) spawnTrafficCar(g);
 g.bruno = spawnPeds(g, 15);
@@ -125,6 +157,8 @@ const touchUI = g.mobile && !shotName ? initTouch(g) : null;
 // A handle for the headless play-test and screenshot scripts (and curious players
 // in devtools): the whole game state, live.
 window.__sm = g;
+g.camera = camera; // debug handle for the headless camera checks
+g.heroMark = heroMark;
 
 function persist() {
   g.saveData.money = g.money;
@@ -236,6 +270,7 @@ function doWasted() {
 /** After busted/wasted: back on the street with full health, heat gone. */
 function respawn() {
   const p = g.player;
+  g.cam.init = false; // teleport: the free camera re-seats behind the hero
   const wasBusted = g.state === 'busted';
   if (p.car) {
     p.car.occupant = null;
@@ -400,6 +435,62 @@ const camPos = new THREE.Vector3(900, 420, 300);
 const camLook = new THREE.Vector3(1270, 10, 1100);
 
 /** Move the camera for the current state: title orbit, foot follow, car chase. */
+// GTA-style camera zoom steps (slant range from the hero).
+const ZOOM_STEPS = [140, 190, 250, 330];
+
+/** Shortest signed arc from angle a to angle b, in (-PI, PI]. */
+function angleArc(a, b) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+/**
+ * Nearest distance along the ray (origin + dir * t, dir normalised) at which
+ * it enters a building's box — footprint [b.x, b.x+b.w] x [b.y, b.y+b.h],
+ * height the visual height including the parapet — or Infinity when the ray
+ * stays clear for maxT units. Drives both the camera collision (nothing may
+ * sit between the anchor and the camera) and the hero-occlusion test.
+ */
+function rayBuildingT(ox, oy, oz, dx, dy, dz, maxT) {
+  let best = Infinity;
+  for (const b of g.city.buildings) {
+    const top = b.height * 1.9 + 5;
+    let t0 = 0;
+    let t1 = maxT;
+    if (Math.abs(dx) < 1e-9) {
+      if (ox < b.x || ox > b.x + b.w) continue;
+    } else {
+      let ta = (b.x - ox) / dx;
+      let tb = (b.x + b.w - ox) / dx;
+      if (ta > tb) { const s = ta; ta = tb; tb = s; }
+      t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+      if (t0 > t1) continue;
+    }
+    if (Math.abs(dy) < 1e-9) {
+      if (oy < 0 || oy > top) continue;
+    } else {
+      let ta = -oy / dy;
+      let tb = (top - oy) / dy;
+      if (ta > tb) { const s = ta; ta = tb; tb = s; }
+      t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+      if (t0 > t1) continue;
+    }
+    if (Math.abs(dz) < 1e-9) {
+      if (oz < b.y || oz > b.y + b.h) continue;
+    } else {
+      let ta = (b.y - oz) / dz;
+      let tb = (b.y + b.h - oz) / dz;
+      if (ta > tb) { const s = ta; ta = tb; tb = s; }
+      t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+      if (t0 > t1) continue;
+    }
+    if (t0 < best) best = t0;
+  }
+  return best;
+}
+
 function updateCamera(dt) {
   const p = g.player;
   if (g.fixedCam) {
@@ -407,53 +498,158 @@ function updateCamera(dt) {
     camera.lookAt(g.fixedCam.look.x, g.fixedCam.look.y, g.fixedCam.look.z);
     return;
   }
-  let tx;
-  let ty;
-  let tz;
-  let lx;
-  let ly;
-  let lz;
-  let rate = 5;
   if (g.state === 'title') {
+    // The title keeps its slow cinematic orbit, exactly as before.
     const a = g.time * 0.07;
-    tx = 1270 + Math.cos(a) * 620;
-    ty = 330;
-    tz = 1100 + Math.sin(a) * 620;
-    lx = 1270;
-    ly = 0;
-    lz = 1100;
-    rate = 2;
-  } else if (p.state === 'car' && p.car) {
-    const a = p.car.angle;
-    tx = p.car.x - Math.cos(a) * 195;
-    ty = 138;
-    tz = p.car.y - Math.sin(a) * 195;
-    lx = p.car.x + Math.cos(a) * 85;
-    ly = 12;
-    lz = p.car.y + Math.sin(a) * 85;
-    rate = 4.2;
-  } else {
-    tx = p.x - 60;
-    ty = 165;
-    tz = p.y + 215;
-    lx = p.x + Math.cos(p.angle) * 42;
-    ly = 12;
-    lz = p.y + Math.sin(p.angle) * 42;
+    const k = 1 - Math.exp(-2 * dt);
+    camPos.x += (1270 + Math.cos(a) * 620 - camPos.x) * k;
+    camPos.y += (330 - camPos.y) * k;
+    camPos.z += (1100 + Math.sin(a) * 620 - camPos.z) * k;
+    camLook.x += (1270 - camLook.x) * k;
+    camLook.y += (0 - camLook.y) * k;
+    camLook.z += (1100 - camLook.z) * k;
+    camera.position.copy(camPos);
+    if (camera.fov !== 55) { camera.fov = 55; camera.updateProjectionMatrix(); }
+    heroMark.visible = false;
+    camera.lookAt(camLook);
+    return;
   }
-  const k = 1 - Math.exp(-rate * dt);
+
+  // --- GTA-style free camera for the play states ---
+  const cam = g.cam;
+  const inCar = p.state === 'car' && !!p.car;
+  const facing = inCar ? p.car.angle : p.angle;
+  const speedFrac = inCar ? Math.min(1, Math.abs(p.car.speed) / CAR.maxSpeed) : 0;
+  const anchor = { x: p.x, y: 18, z: p.y };
+
+  if (!cam.init) {
+    // Entering play (or respawning across the city): start behind the hero.
+    cam.yaw = facing + Math.PI;
+    cam.dist = ZOOM_STEPS[cam.zoomIdx] * (inCar ? 1.2 : 1);
+    cam.collDist = cam.dist;
+    cam.backBlend = 0;
+    cam.init = true;
+    const cp0 = Math.cos(cam.pitch);
+    camPos.set(
+      anchor.x + Math.cos(cam.yaw) * cp0 * cam.dist,
+      anchor.y + Math.sin(cam.pitch) * cam.dist,
+      anchor.z + Math.sin(cam.yaw) * cp0 * cam.dist,
+    );
+  }
+
+  if (g.state === 'play') {
+    // Manual orbit: right/middle mouse drag on desktop, free-area drag on
+    // touch — both arrive as input.orbit pixel deltas.
+    const orb = g.input.orbit;
+    if (orb.dx !== 0 || orb.dy !== 0) {
+      cam.yaw += orb.dx * 0.0052;
+      cam.pitch = Math.max(0.05, Math.min(1.3, cam.pitch + orb.dy * 0.0052));
+      cam.manualT = 0;
+    } else {
+      cam.manualT += dt;
+    }
+    if (g.input.wheelSteps !== 0) {
+      cam.zoomIdx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, cam.zoomIdx + g.input.wheelSteps));
+    }
+    // Auto-align: while the hero moves and the user is not orbiting, ease
+    // back behind the direction of travel, like GTA.
+    const lookBack = g.input.down('KeyQ') || g.input.middleDown;
+    cam.lookBack = lookBack;
+    const moving = inCar ? Math.abs(p.car.speed) > 45 : p.speedNow > 40;
+    if (moving && cam.manualT > 1.1 && !lookBack) {
+      const rate = inCar ? 2.4 : 1.7;
+      cam.yaw += angleArc(cam.yaw, facing + Math.PI) * (1 - Math.exp(-rate * dt));
+    }
+    cam.backBlend += ((lookBack ? 1 : 0) - cam.backBlend) * (1 - Math.exp(-16 * dt));
+  }
+
+  // Distance: zoom step, more room in a car, a small lift with speed.
+  const distTarget = ZOOM_STEPS[cam.zoomIdx] * (inCar ? 1.2 : 1) * (1 + 0.22 * speedFrac);
+  cam.dist += (distTarget - cam.dist) * (1 - Math.exp(-6 * dt));
+
+  const yawEff = cam.yaw + Math.PI * cam.backBlend;
+  const cp = Math.cos(cam.pitch);
+  const dir = { x: Math.cos(yawEff) * cp, y: Math.sin(cam.pitch), z: Math.sin(yawEff) * cp };
+
+  // Building collision: the camera may never have a building between itself
+  // and the hero. Pull in instantly, ease back out slowly — no popping.
+  const hitT = rayBuildingT(anchor.x, anchor.y, anchor.z, dir.x, dir.y, dir.z, cam.dist);
+  // Stay a margin in front of the blocker; when the hero hugs a wall the
+  // clearance is only a few units, so the floor scales with the hit distance
+  // instead of overshooting into the building.
+  const allowed = hitT === Infinity ? cam.dist : (hitT > 14 ? hitT - 6 : Math.max(6, hitT * 0.55));
+  if (allowed < cam.collDist) cam.collDist = allowed;
+  else cam.collDist += (allowed - cam.collDist) * (1 - Math.exp(-3.5 * dt));
+  const effDist = Math.min(cam.dist, cam.collDist);
+
+  // Close-quarters fallback: when collision has pulled the camera right in,
+  // raise it toward a top-down view so the hero and his surroundings stay
+  // readable instead of the screen filling with the wall that blocked it.
+  const lift = effDist < 70 ? (1 - effDist / 70) * 0.55 : 0;
+  cam.lift = lift;
+  const pitchEff = Math.min(1.35, cam.pitch + lift);
+  const cpE = Math.cos(pitchEff);
+  const dirE = { x: Math.cos(yawEff) * cpE, y: Math.sin(pitchEff), z: Math.sin(yawEff) * cpE };
+
+  const tx = anchor.x + dirE.x * effDist;
+  const ty = Math.max(7, anchor.y + dirE.y * effDist);
+  const tz = anchor.z + dirE.z * effDist;
+  const k = 1 - Math.exp(-12 * dt);
   camPos.x += (tx - camPos.x) * k;
   camPos.y += (ty - camPos.y) * k;
   camPos.z += (tz - camPos.z) * k;
-  camLook.x += (lx - camLook.x) * k;
-  camLook.y += (ly - camLook.y) * k;
-  camLook.z += (lz - camLook.z) * k;
+  // Hard guarantee on the smoothed result: if a building still blocks the
+  // anchor->camera segment, pull the camera in front of it.
+  {
+    const dx = camPos.x - anchor.x;
+    const dy = camPos.y - anchor.y;
+    const dz = camPos.z - anchor.z;
+    const len = Math.hypot(dx, dy, dz);
+    if (len > 1) {
+      const t = rayBuildingT(anchor.x, anchor.y, anchor.z, dx / len, dy / len, dz / len, len);
+      if (t < len - 1) {
+        const d2 = t > 12 ? t - 5 : Math.max(5, t * 0.55);
+        camPos.set(
+          anchor.x + (dx / len) * d2,
+          Math.max(7, anchor.y + (dy / len) * d2),
+          anchor.z + (dz / len) * d2,
+        );
+      }
+    }
+  }
   camera.position.copy(camPos);
   if (g.shake > 0.1) {
     camera.position.x += (Math.random() - 0.5) * g.shake;
     camera.position.y += (Math.random() - 0.5) * g.shake * 0.6;
     g.shake *= Math.exp(-7 * dt);
   }
+  // Look at the hero, a little ahead of him — further ahead at car speed.
+  const ahead = inCar ? 40 : 12;
+  camLook.set(anchor.x + Math.cos(facing) * ahead, 14, anchor.z + Math.sin(facing) * ahead);
   camera.lookAt(camLook);
+
+  // A slight FOV lift while driving fast.
+  const fovT = 55 + (inCar ? 9 * speedFrac : 0);
+  if (Math.abs(camera.fov - fovT) > 0.05) {
+    camera.fov += (fovT - camera.fov) * (1 - Math.exp(-5 * dt));
+    camera.updateProjectionMatrix();
+  }
+
+  // Occlusion fallback: if a building still hides the hero from the final
+  // camera (anchor ray clear but the hero's head behind a corner), show the
+  // through-walls marker so he never fully disappears.
+  const hx = p.x - camera.position.x;
+  const hy = 22 - camera.position.y;
+  const hz = p.y - camera.position.z;
+  const hLen = Math.hypot(hx, hy, hz);
+  const blocked = hLen > 1
+    && rayBuildingT(camera.position.x, camera.position.y, camera.position.z, hx / hLen, hy / hLen, hz / hLen, hLen) < hLen * 0.97;
+  cam.occluded = blocked;
+  heroMark.visible = blocked && (g.state === 'play' || g.state === 'paused');
+  if (heroMark.visible) {
+    heroMark.position.set(p.x, 0, p.y);
+    heroMark.children[1].position.y = 52 + Math.sin(g.time * 3.2) * 4;
+  }
 }
 
 /** Engine and siren loops follow the world state. */

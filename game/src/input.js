@@ -13,6 +13,44 @@ export class Input {
     // thumb is on the stick; inactive (active=false) on keyboard/mouse.
     this.stick = { x: 0, y: 0, active: false };
     this.mouse = { x: 0, y: 0, down: false, clicked: false };
+    // Camera orbit deltas in pixels, accumulated by mouse drags (right or
+    // middle button) and by touch drags on the free screen area in touch.js;
+    // main.js reads them in the camera update and endFrame clears them.
+    this.orbit = { dx: 0, dy: 0 };
+    // Wheel notches accumulated since the last frame (+1 = zoom out).
+    this.wheelSteps = 0;
+    // Middle mouse held: the GTA-style look-back while it lasts (Q works too).
+    this.middleDown = false;
+    let dragBtn = -1;
+    let lastX = 0;
+    let lastY = 0;
+    canvas.addEventListener('mousedown', (event) => {
+      if (event.button === 1 || event.button === 2) {
+        dragBtn = event.button;
+        lastX = event.clientX;
+        lastY = event.clientY;
+        if (event.button === 1) {
+          this.middleDown = true;
+          event.preventDefault();
+        }
+      }
+    });
+    window.addEventListener('mousemove', (event) => {
+      if (dragBtn < 0) return;
+      this.orbit.dx += event.clientX - lastX;
+      this.orbit.dy += event.clientY - lastY;
+      lastX = event.clientX;
+      lastY = event.clientY;
+    });
+    window.addEventListener('mouseup', (event) => {
+      if (event.button === dragBtn) dragBtn = -1;
+      if (event.button === 1) this.middleDown = false;
+    });
+    canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+    canvas.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      this.wheelSteps += event.deltaY > 0 ? 1 : -1;
+    }, { passive: false });
     window.addEventListener('keydown', (event) => {
       if (event.repeat) return;
       this.keys.add(event.code);
@@ -78,5 +116,8 @@ export class Input {
   endFrame() {
     this.pressed.clear();
     this.mouse.clicked = false;
+    this.orbit.dx = 0;
+    this.orbit.dy = 0;
+    this.wheelSteps = 0;
   }
 }

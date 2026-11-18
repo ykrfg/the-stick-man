@@ -181,6 +181,7 @@ function drawTitleMobile(g, ctx) {
   ctx.fillStyle = '#e8ecf4';
   const lines = [
     'Left thumb — move · drive',
+    'Drag open screen — swing camera',
     'Right buttons — USE · PUNCH · SHOOT',
     'USE — steal cars, talk, take jobs',
     'SPRINT — tap to toggle',
@@ -227,7 +228,8 @@ function drawTitle(g, ctx) {
     'WASD / Arrows — move        Shift — sprint',
     'E — enter / exit car, talk        F or J — punch',
     'K or mouse click — shoot (once you have the pistol)',
-    'P — pause        M — mute',
+    'Right-drag mouse — camera        Wheel — zoom',
+    'Q (hold) — look back        P — pause        M — mute',
     'Steal cars. Run jobs for Bruno. Mind the stars.',
   ];
   lines.forEach((line, i) => ctx.fillText(line, cx, 356 + i * 30));
