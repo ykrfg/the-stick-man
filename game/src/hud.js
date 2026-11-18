@@ -188,6 +188,7 @@ function drawTitleMobile(g, ctx) {
     'SPRINT — tap to toggle',
     'DASH — burst of speed on foot',
     "Heal at Bruno's / St. Palm · repair at Spray 'n Go",
+    'Lose the cops — hide till the stars fade',
     'Steal cars. Run jobs for Bruno.',
     'Mind the stars.',
   ];
@@ -243,28 +244,29 @@ function drawTitle(g, ctx) {
     'K or mouse click — shoot (once you have the pistol)',
     'Right-drag mouse — camera        Wheel — zoom',
     'Q (hold) — look back        P — pause        M — mute',
-    "Heal: eat at Bruno's · treatment at St. Palm Hospital",
-    "Repair your car: hold still in the Spray 'n Go bay",
+    "Heal: eat at Bruno's · treatment at St. Palm · repairs at Spray 'n Go",
+    'Lose the cops: break their line of sight — heat cools, stars fade.',
+    "Spray 'n Go wipes the heat instantly, for a price.",
     'Steal cars. Run jobs for Bruno. Mind the stars.',
   ];
-  lines.forEach((line, i) => ctx.fillText(line, cx, 356 + i * 30));
+  lines.forEach((line, i) => ctx.fillText(line, cx, 350 + i * 28));
   const save = g.saveData;
   ctx.font = '700 22px system-ui, sans-serif';
   ctx.fillStyle = '#7dff8a';
   const jobsDone = save && Array.isArray(save.missionsDone) ? save.missionsDone.length : 0;
   if (save && (save.money > 0 || jobsDone > 0)) {
-    ctx.fillText(`CONTINUE — $${save.money} · ${jobsDone} job(s) done — press ENTER`, cx, 356 + lines.length * 30 + 26);
+    ctx.fillText(`CONTINUE — $${save.money} · ${jobsDone} job(s) done — press ENTER`, cx, 350 + lines.length * 28 + 26);
   } else {
-    ctx.fillText('Press ENTER to start', cx, 356 + lines.length * 30 + 26);
+    ctx.fillText('Press ENTER to start', cx, 350 + lines.length * 28 + 26);
   }
   if (hasProgress(save)) {
     ctx.font = '600 16px system-ui, sans-serif';
     if (g.resetArm?.armed) {
       ctx.fillStyle = '#ff8a7a';
-      ctx.fillText('Press R again to CONFIRM reset — your save will be wiped!', cx, 356 + lines.length * 30 + 58);
+      ctx.fillText('Press R again to CONFIRM reset — your save will be wiped!', cx, 350 + lines.length * 28 + 58);
     } else {
       ctx.fillStyle = '#8b93a5';
-      ctx.fillText('R — reset progress', cx, 356 + lines.length * 30 + 58);
+      ctx.fillText('R — reset progress', cx, 350 + lines.length * 28 + 58);
     }
   }
   ctx.font = '500 15px system-ui, sans-serif';
@@ -387,10 +389,15 @@ export function drawHUD(g) {
     ctx.globalAlpha = 1;
   }
 
-  // Wanted stars, top-right, with the heat bar under them.
+  // Wanted stars, top-right, with the heat bar under them. While the heat
+  // is actively cooling (no police unit close enough to watch — police.js
+  // sets g.cooling only while heat is really draining), the lit stars
+  // pulse gold-to-grey: the classic "you are losing them" signal, driven
+  // by the true cooling state, never by a guessed timer.
   const stars = starsFor(g.heat);
+  const blinkOff = g.cooling && Math.floor(g.time * 2.6) % 2 === 1;
   for (let i = 0; i < 5; i += 1) {
-    star(ctx, w - 34 - i * 38, 34, 15, true, i < stars);
+    star(ctx, w - 34 - i * 38, 34, 15, true, i < stars && !blinkOff);
   }
   if (g.heat > 0) {
     const next = HEAT_THRESHOLDS[stars] ?? HEAT_THRESHOLDS[HEAT_THRESHOLDS.length - 1];
@@ -402,6 +409,13 @@ export function drawHUD(g) {
     roundRect(ctx, w - 34 - 4 * 38 - 15, 56, (5 * 38 - 8) * frac, 6, 3);
     ctx.fillStyle = '#ffd94d';
     ctx.fill();
+  }
+  if (g.cooling && g.heat > 0) {
+    ctx.font = '700 12.5px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(255,217,77,0.92)';
+    ctx.textAlign = 'right';
+    ctx.fillText('LOSING THEM — stay out of sight…', w - 19, 80);
+    ctx.textAlign = 'left';
   }
 
   // Objective, top-center (shrinks to fit narrow phone screens). When the

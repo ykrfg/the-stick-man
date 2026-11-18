@@ -64,6 +64,7 @@ const g = {
   bustProgress: 0,
   bustMax: 2.2,
   coolT: 0,
+  cooling: false,
   policeSpawnCd: 0,
   policeNear: false,
   threat: null,
@@ -440,6 +441,10 @@ function processEvents() {
       case 'starup':
         g.sfx.alarm();
         g.toast = { text: `WANTED ${'★'.repeat(ev.stars)}`, t: 1.8 };
+        break;
+      case 'heatoff':
+        g.say('THE HEAT IS OFF', 'Palmera PD lost your trail. Stay clean, stick.', 3.2);
+        g.sfx.tone('sine', 520, 780, 0.14, 0.09);
         break;
       case 'boarded': onBoarded(g); g.sfx.pickup(); break;
       case 'officer': g.sfx.tone('square', 520, 660, 0.07, 0.14); break;

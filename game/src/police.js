@@ -111,11 +111,23 @@ export function updatePolice(g, dt, time) {
     if (ped.role === 'cop' && ped.state === 'fight') nearest = Math.min(nearest, Math.hypot(ped.x - p.x, ped.y - p.y));
   }
   g.policeNear = nearest < 470;
+  // `cooling` is the HUD's "losing them" signal: it is true exactly while
+  // heat is draining, so the blinking stars never lie about the state.
+  g.cooling = false;
   if (nearest > 430) {
     g.coolT += dt;
     if (g.coolT > 3.2 && g.heat > 0) {
+      const prevStars = g.stars;
       g.heat = Math.max(0, g.heat - 13 * dt);
       g.stars = starsFor(g.heat);
+      g.cooling = true;
+      // A chase ended by stealth is an event worth announcing: fire at
+      // the moment the drain winks out the last star (heat still has a
+      // little left to bleed off, but the PD gives up at zero stars —
+      // that is when its cars turn away). The Spray 'n Go wipe and
+      // busted/wasted set heat directly in main.js and never come
+      // through here, so they stay banner-free.
+      if (prevStars > 0 && g.stars === 0) g.events.push({ type: 'heatoff' });
     }
   } else {
     g.coolT = 0;
