@@ -621,7 +621,11 @@ function finishRobbery(i) {
 function updateInteractions(dt) {
   const p = g.player;
   g.prompt = '';
-  if (g.transition) return;
+  // Only the enter scramble owns the prompt line. The exit step-out
+  // must not: he is on foot for every gameplay system from the moment
+  // he leaves the seat, so his prompt (re-enter, talk, a service) has
+  // to come up at once — gating it ate the press that followed.
+  if (g.transition && g.transition.kind !== 'exit') return;
   if (p.state === 'foot') {
     const L = g.city.landmarks;
     if (g.robbery) {
@@ -754,7 +758,16 @@ function healAt(name, fullPrice, okLine, brokeLine) {
 /** Handle the E key: talk, heal, steal, or climb out — in that order. */
 function handleInteract() {
   const p = g.player;
-  if (g.transition) return;
+  if (g.transition && g.transition.kind !== 'exit') return;
+  if (g.transition) {
+    // An E press during the step-out is a real order, not noise to
+    // swallow: drop the exit carry where he stands and handle the
+    // press from there (re-enter, talk, grab — whatever is in range).
+    g.transition = null;
+    p.fig.target.crouch = 0;
+    p.fig.target.reach = 0;
+    p.fig.target.drive = 0;
+  }
   if (p.state === 'foot') {
     if (g.robbery) return; // E does nothing while a hold-up is being stood through
     const L = g.city.landmarks;
@@ -1133,24 +1146,42 @@ function frame(now) {
       if (g.hitstop > 0) g.hitstop = Math.max(0, g.hitstop - dt);
       if (g.transition?.kind === 'exit') {
         // Stepping out: from the seat to the kerb, rising out of the
-        // drive pose while the reach comes down off the door.
+        // drive pose while the reach comes down off the door. The
+        // carry owns his position only while he is still where it
+        // left him last frame: anything that moves him off the path
+        // (a hit, a shove, a knockback landing) ends the carry on
+        // the spot instead of dragging him back to the kerb line,
+        // and the normal on-foot update takes him from where he is.
         const tr = g.transition;
-        tr.t += wdt;
-        const k = Math.min(1, tr.t / tr.dur);
-        const e = k * k * (3 - 2 * k);
-        p.x = tr.fromX + (tr.doorX - tr.fromX) * e;
-        p.y = tr.fromY + (tr.doorY - tr.fromY) * e;
-        p.angle = tr.angle;
-        p.fig.target.drive = Math.max(0, 1 - e * 1.35);
-        p.fig.target.crouch = Math.sin(Math.min(1, k) * Math.PI) * 0.55;
-        p.fig.target.reach = Math.max(0, 1 - k * 1.8);
-        p.fig.target.bank = 0;
-        p.speedNow = 90 * (1 - e);
-        syncFigure(p, wdt, g.time);
-        if (k >= 1) {
+        const lx = tr.px ?? tr.fromX;
+        const ly = tr.py ?? tr.fromY;
+        if (Math.hypot(p.x - lx, p.y - ly) > 3) {
           g.transition = null;
           p.fig.target.crouch = 0;
           p.fig.target.reach = 0;
+          p.fig.target.drive = 0;
+          updatePlayerOnFoot(g, wdt);
+          syncFigure(p, wdt, g.time);
+        } else {
+          tr.t += wdt;
+          const k = Math.min(1, tr.t / tr.dur);
+          const e = k * k * (3 - 2 * k);
+          p.x = tr.fromX + (tr.doorX - tr.fromX) * e;
+          p.y = tr.fromY + (tr.doorY - tr.fromY) * e;
+          tr.px = p.x;
+          tr.py = p.y;
+          p.angle = tr.angle;
+          p.fig.target.drive = Math.max(0, 1 - e * 1.35);
+          p.fig.target.crouch = Math.sin(Math.min(1, k) * Math.PI) * 0.55;
+          p.fig.target.reach = Math.max(0, 1 - k * 1.8);
+          p.fig.target.bank = 0;
+          p.speedNow = 90 * (1 - e);
+          syncFigure(p, wdt, g.time);
+          if (k >= 1) {
+            g.transition = null;
+            p.fig.target.crouch = 0;
+            p.fig.target.reach = 0;
+          }
         }
       } else if (g.transition) {
         const tr = g.transition;
