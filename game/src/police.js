@@ -150,6 +150,12 @@ export function updatePolice(g, dt, time) {
   }
   for (const car of policeCars) {
     if (g.stars === 0) {
+      if (car.wrecked) {
+        // A wrecked unit cannot drive off; the city tows it once the
+        // heat is gone. (Player-owned wrecks never reach this filter.)
+        removeCar(g, car);
+        continue;
+      }
       // The heat is gone: drive off and despawn in the distance.
       car.speed = Math.min(CAR.trafficSpeed, car.speed + 200 * dt);
       car.x += Math.cos(car.angle) * car.speed * dt;

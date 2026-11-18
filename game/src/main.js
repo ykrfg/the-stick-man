@@ -13,7 +13,7 @@ import { clearSave, hasProgress, loadSave, storeSave } from './save.js';
 import { buildCity } from './city.js';
 import { buildWorld } from './world3d.js';
 import { createFigure } from './stick3d.js';
-import { drivePlayerCar, spawnParkedCars, spawnTrafficCar, syncCarMesh, updateTraffic } from './vehicles.js';
+import { damageCar, drivePlayerCar, spawnParkedCars, spawnTrafficCar, updatePlayerCarHits, updateTraffic } from './vehicles.js';
 import { hurtPed, seatDriverFigure, spawnPeds, syncFigure, updatePeds, updatePlayerOnFoot } from './people.js';
 import { spawnCashPickup, updateBullets, updateCombat, updatePickups } from './combat.js';
 import { addHeat, updatePolice } from './police.js';
@@ -127,6 +127,12 @@ g.player = {
   dashCd: 0,
   dashDirX: 1,
   dashDirY: 0,
+  // Car-hit state (vehicles.js): post-hit invulnerability, the down
+  // timer of a knockback, and the knockback velocity people.js carries.
+  hurtT: 0,
+  downT: 0,
+  kbX: 0,
+  kbY: 0,
   punchCd: 0,
   shotCd: 0,
   punchHitT: 0,
@@ -412,6 +418,10 @@ function respawn() {
   p.state = 'foot';
   p.fig.target.drive = 0;
   p.fig.target.down = 0;
+  p.downT = 0;
+  p.hurtT = 0;
+  p.kbX = 0;
+  p.kbY = 0;
   p.fig.shadow.visible = true;
   const spot = wasBusted ? g.city.landmarks.pd : g.city.landmarks.hospital;
   p.x = spot.x;
@@ -457,25 +467,27 @@ function processEvents() {
       case 'npcpunch': {
         g.sfx.punch();
         if (ev.targetCar && p.car) {
-          p.car.hp = Math.max(0, p.car.hp - 6);
-          if (p.car.hp <= 0 && !p.car.wrecked) {
-            // The car becomes a wreck in place: marked, tilted, unenterable,
-            // and — being player-owned since it was taken — never cleaned
-            // up, never driven away by a fleet system. (A car at stale low
-            // hp, e.g. one the player softened up before stealing it, can
-            // still reach this in a single hit; the car HP bar on the HUD
-            // is the warning, and the Spray 'n Go bay is the way back for
-            // damage short of this.)
-            p.car.wrecked = true;
-            p.car.speed = 0;
-            syncCarMesh(p.car, 0);
-            exitCar();
-            p.hp = Math.min(p.hp, 35);
-            g.say(t('banner.wrecked.title'), t('banner.wrecked.sub'), 3);
-          }
+          // Fists drain the car 6 a hit; damageCar owns the crossing to
+          // the wreck state (and the 'playerwreck' event below runs the
+          // forced exit), so a car softened up before it was stolen can
+          // still die here in a single hit. The car HP bar on the HUD is
+          // the warning; the Spray 'n Go bay is the way back.
+          damageCar(g, p.car, 6);
         } else {
           p.hp -= ev.ped.role === 'cop' ? 7 : 9;
           g.shake = Math.max(g.shake, 3);
+        }
+        break;
+      }
+      case 'playerwreck': {
+        // The player's car reached hp 0 under him — crash damage or
+        // fists (damageCar pushed this). The wreck stays where it died:
+        // marked, tilted, unenterable, and — being player-owned since
+        // it was taken — never cleaned up or driven away by a fleet.
+        if (p.state === 'car' && p.car === ev.car) {
+          exitCar();
+          p.hp = Math.min(p.hp, 35);
+          g.say(t('banner.wrecked.title'), t('banner.wrecked.sub'), 3);
         }
         break;
       }
@@ -1056,6 +1068,7 @@ function frame(now) {
       updateBullets(g, dt);
       updatePickups(g, dt, g.time);
       updatePolice(g, dt, g.time);
+      updatePlayerCarHits(g);
       updateMissions(g, dt, g.time);
       updateInteractions(dt);
       processEvents();

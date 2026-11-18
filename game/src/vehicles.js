@@ -4,7 +4,7 @@
 // network lane by lane, the player's arcade driving, and the shared collision
 // resolution (buildings, other cars, pedestrians) that police cars reuse.
 import * as THREE from 'three';
-import { CAR, ROAD, WORLD } from './config.js';
+import { CAR, CRASH_DAMAGE, PLAYER, ROAD, WORLD } from './config.js';
 import { clampToWorld, resolveCircleCollision } from './city.js';
 import { toonMat, basicMat } from './stick3d.js';
 
@@ -227,6 +227,35 @@ function applyShove(car, dt) {
 }
 
 /**
+ * The wreck state, entered at hp <= 0 however the damage arrived (crash,
+ * fists, a wall): sunk and tilted via syncCarMesh, speed zero, never
+ * enterable (nearestEnterableCar skips wrecked), and no fleet system
+ * moves it again — traffic and police updates both skip wrecked cars.
+ */
+export function wreckCar(g, car) {
+  if (car.wrecked) return;
+  car.wrecked = true;
+  car.speed = 0;
+  car.shoveX = 0;
+  car.shoveY = 0;
+  syncCarMesh(car, 0);
+}
+
+/**
+ * Apply damage to a car; crossing to zero enters the wreck state. When
+ * the PLAYER's car is wrecked out from under him, a 'playerwreck' event
+ * lets main.js run the forced-exit flow (the same one flying fists use).
+ */
+export function damageCar(g, car, amount) {
+  if (car.wrecked || !(amount > 0)) return;
+  car.hp = Math.max(0, car.hp - amount);
+  if (car.hp <= 0) {
+    wreckCar(g, car);
+    if (car.occupant === 'player') g.events.push({ type: 'playerwreck', car });
+  }
+}
+
+/**
  * Move a free-driving car (player's or police) by its angle and speed, resolving
  * building collisions (with a crash event when the impact is hard), car-to-car
  * bumps and pedestrian run-overs (reported through g.events for main.js to judge).
@@ -242,9 +271,27 @@ export function moveFreeCar(g, car, dt) {
   car.x += Math.cos(car.angle) * car.speed * dt;
   car.y += Math.sin(car.angle) * car.speed * dt;
   clampToWorld(car, 30);
+  const attX = car.x;
+  const attY = car.y;
   if (resolveCircleCollision(g.city, car, CAR.radius)) {
     if (Math.abs(prevSpeed) > 190) {
       g.events.push({ type: 'crash', strength: Math.min(1, Math.abs(prevSpeed) / 420), byPlayer: car.occupant === 'player' });
+    }
+    // Wall damage follows the speed INTO the wall, not the raw speed:
+    // the resolver's push-out vector points along the wall's normal, so
+    // the closing speed is the velocity component against it. Rubbing
+    // along a facade while parking has almost no inward component and
+    // stays free; a fast head-on pays the struck car's share of damage.
+    const pushX = car.x - attX;
+    const pushY = car.y - attY;
+    const pushLen = Math.hypot(pushX, pushY);
+    if (pushLen > 0.01) {
+      const vx = Math.cos(car.angle) * prevSpeed;
+      const vy = Math.sin(car.angle) * prevSpeed;
+      const closing = -(vx * (pushX / pushLen) + vy * (pushY / pushLen));
+      if (closing > 80) {
+        damageCar(g, car, Math.min(1, closing / 420) * CRASH_DAMAGE.wall);
+      }
     }
     car.speed = -prevSpeed * 0.22;
   }
@@ -296,6 +343,11 @@ export function moveFreeCar(g, car, dt) {
       // costs about half. Below the threshold there is no cut at all —
       // the grind keeps its speed and shoves the other car ahead.
       car.speed *= 1 - 0.5 * strength;
+      // Both cars pay for a real impact, the struck car more than the
+      // mover (CRASH_DAMAGE). A wrecked car takes no further damage;
+      // damageCar handles the crossing into the wreck state.
+      damageCar(g, car, strength * CRASH_DAMAGE.mover);
+      damageCar(g, other, strength * CRASH_DAMAGE.struck);
       g.events.push({ type: 'crash', strength, byPlayer: car.occupant === 'player' });
     }
   }
@@ -312,9 +364,65 @@ export function moveFreeCar(g, car, dt) {
   syncCarMesh(car, dt);
 }
 
+const PLAYER_HIT_RANGE = 30;
+
+/**
+ * The on-foot player vs moving cars. He is not a ped, and nothing used
+ * to touch him: cars passed through him without consequence. Now the
+ * same relative-speed philosophy as car-to-car applies — a car rolling
+ * at grind speed (<= 55) only shoulders him aside, but a car with real
+ * speed behind it hits him: speed-scaled damage, a knockback that
+ * throws him clear (people.js carries it as a brief down/stagger), and
+ * a second of post-hit invulnerability (p.hurtT) so one car cannot
+ * multi-tap him to death. Traffic and police cars alike. A fast enough
+ * hit at low health wastes him through the usual hp <= 0 flow.
+ */
+export function updatePlayerCarHits(g) {
+  const p = g.player;
+  if (p.state !== 'foot' || g.transition) return;
+  for (const car of g.cars) {
+    if (car.occupant === 'player') continue;
+    const dx = p.x - car.x;
+    const dy = p.y - car.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 >= PLAYER_HIT_RANGE * PLAYER_HIT_RANGE) continue;
+    const d = Math.sqrt(d2) || 1;
+    const nx = dx / d;
+    const ny = dy / d;
+    const speed = Math.abs(car.speed);
+    if (speed <= 55) {
+      // Slow roll: no damage, just out of the way.
+      p.x = car.x + nx * PLAYER_HIT_RANGE;
+      p.y = car.y + ny * PLAYER_HIT_RANGE;
+      continue;
+    }
+    if ((p.hurtT ?? 0) > 0) continue;
+    const strength = Math.min(1, speed / 440);
+    p.hp -= Math.round(15 + strength * 70);
+    // Knockback: away from the car, blended with its travel direction,
+    // so he is thrown clear of the path instead of under the wheels.
+    const fx = Math.cos(car.angle) * Math.sign(car.speed);
+    const fy = Math.sin(car.angle) * Math.sign(car.speed);
+    let kx = nx * 0.7 + fx * 0.7;
+    let ky = ny * 0.7 + fy * 0.7;
+    const kl = Math.hypot(kx, ky) || 1;
+    const power = 300 + speed * 1.1;
+    p.kbX = (kx / kl) * power;
+    p.kbY = (ky / kl) * power;
+    p.downT = 0.55;
+    p.hurtT = 1.0;
+    p.exprT = 1.1;
+    p.fig.setExpression('angry');
+    g.shake = Math.max(g.shake, 4 + strength * 7);
+    g.sfx.hurt();
+    break; // one hit per frame is plenty
+  }
+  resolveCircleCollision(g.city, p, PLAYER.radius);
+  clampToWorld(p, 20);
+}
+
 /** The player's driving: arcade acceleration, braking, steering and drag. */
-export function drivePlayerCar(g, dt) {
-  const car = g.player.car;
+export function drivePlayerCar(g, dt) {  const car = g.player.car;
   if (!car || car.wrecked) return;
   const axes = g.input.axes();
   const throttle = -axes.y;

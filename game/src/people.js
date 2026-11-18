@@ -201,6 +201,26 @@ function angleArc(a, b) {
  */
 export function updatePlayerOnFoot(g, dt) {
   const p = g.player;
+  // Post-hit state (vehicles.js updatePlayerCarHits sets these when a
+  // moving car connects): a second of invulnerability, and the brief
+  // down/stagger of the hit itself. While down there is no input
+  // control — the knockback slide carries him clear while the rig's
+  // down pose plays, then he is back on his feet.
+  p.hurtT = Math.max(0, (p.hurtT ?? 0) - dt);
+  if ((p.downT ?? 0) > 0) {
+    p.downT -= dt;
+    p.x += (p.kbX ?? 0) * dt;
+    p.y += (p.kbY ?? 0) * dt;
+    const kbDecay = Math.max(0, 1 - 6 * dt);
+    p.kbX = (p.kbX ?? 0) * kbDecay;
+    p.kbY = (p.kbY ?? 0) * kbDecay;
+    p.speedNow = Math.hypot(p.kbX ?? 0, p.kbY ?? 0);
+    p.fig.target.down = p.downT > 0 ? 1 : 0;
+    resolveCircleCollision(g.city, p, PLAYER.radius);
+    clampToWorld(p, 16);
+    return;
+  }
+  p.fig.target.down = 0;
   const axes = g.input.axes();
   const sprint = g.input.down('ShiftLeft', 'ShiftRight');
   const speed = sprint ? PLAYER.sprintSpeed : PLAYER.walkSpeed;

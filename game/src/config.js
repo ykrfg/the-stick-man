@@ -73,6 +73,18 @@ export const CAR = {
   policeSpeed: 470,
 };
 
+/**
+ * Crash damage, scaled by the impact's strength (closing speed / 420, the
+ * same scale crash sound/shake/heat already use). Below the grind
+ * threshold (closing <= 55) there is no damage at all — pushing and
+ * scraping stay free. A clean full-speed hit costs the mover about a
+ * fifth of its HP and the struck car about a third; a ram that
+ * bulldozes through into a second contact costs roughly a third / a
+ * half, so a couple of full-tilt wrecks total the struck car. A wall
+ * takes the struck car's share out of the mover.
+ */
+export const CRASH_DAMAGE = { mover: 21, struck: 34, wall: 40 };
+
 export const SAVE_KEY = 'the-stick-man-save-v1';
 
 /** Price of the pistol at the Ammo Hut, and the Spray 'n Go fee per wanted star. */
