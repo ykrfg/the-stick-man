@@ -129,6 +129,11 @@ function drawMinimap(g, ctx) {
     const pulse = 4.5 + Math.sin(g.time * 5) * 1.4;
     dot(marker.position.x, marker.position.z, pulse, g.markerGold.visible ? '#ffd94d' : '#ff5a4d');
   }
+  // Traffic: small muted dots, so the city's flow reads on the map
+  // without competing with police, rivals or the objective marker.
+  for (const car of g.cars) {
+    if (car.kind === 'traffic') dot(car.x, car.y, 2.1, 'rgba(205,212,224,0.5)');
+  }
   // Police and rivals.
   for (const car of g.cars) {
     if (car.kind === 'police') dot(car.x, car.y, 3.6, Math.floor(g.time * 5) % 2 ? '#ff5a4d' : '#5aa2ff');
@@ -318,6 +323,53 @@ function drawEndScreen(g, ctx, title, color, sub) {
     ctx.font = '700 20px system-ui, sans-serif';
     ctx.fillStyle = '#7dff8a';
     ctx.fillText(t('end.pressEnter'), w / 2, h / 2 + 62);
+  }
+}
+
+/**
+ * Off-screen traffic warnings (vehicles.js fills g.trafficWarn each
+ * frame, on foot only): one triangle per unseen car that is close and
+ * closing, sitting on the screen edge in the car's direction and
+ * pointing in at it. Amber while there is still time to step aside,
+ * flashing red once the car is about to arrive; the marker grows a
+ * little with urgency. A pure icon — no text, so nothing to translate.
+ */
+function drawTrafficWarnings(g, ctx) {
+  const warns = g.trafficWarn;
+  if (!warns || warns.length === 0 || g.state !== 'play') return;
+  const { viewW: w, viewH: h } = g;
+  const inset = g.mobile ? 15 : 24;
+  const cx = w / 2;
+  const cy = h / 2;
+  const hx = Math.max(30, cx - inset);
+  const hy = Math.max(30, cy - inset);
+  for (const warn of warns) {
+    const dx = Math.cos(warn.angle);
+    const dy = Math.sin(warn.angle);
+    // Where the ray from the screen centre along the car's screen
+    // direction meets the inset rectangle: that edge point is home.
+    const tx = dx !== 0 ? hx / Math.abs(dx) : Infinity;
+    const ty = dy !== 0 ? hy / Math.abs(dy) : Infinity;
+    const tEdge = Math.min(tx, ty);
+    const ex = cx + dx * tEdge;
+    const ey = cy + dy * tEdge;
+    const urgent = warn.urgency > 0.62;
+    const s = 11 + warn.urgency * 5;
+    ctx.save();
+    ctx.globalAlpha = urgent ? (Math.floor(g.time * 6) % 2 === 0 ? 1 : 0.4) : 0.9;
+    ctx.translate(ex, ey);
+    ctx.rotate(Math.atan2(-dy, -dx)); // the tip points back toward the centre
+    ctx.beginPath();
+    ctx.moveTo(s, 0);
+    ctx.lineTo(-s * 0.75, s * 0.62);
+    ctx.lineTo(-s * 0.75, -s * 0.62);
+    ctx.closePath();
+    ctx.fillStyle = urgent ? '#ff4747' : '#ffb02e';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(10,10,18,0.75)';
+    ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -523,6 +575,8 @@ export function drawHUD(g) {
   }
 
   drawMinimap(g, ctx);
+
+  drawTrafficWarnings(g, ctx);
 
   if (g.state === 'paused') {
     ctx.fillStyle = 'rgba(10,12,20,0.6)';

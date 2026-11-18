@@ -13,7 +13,7 @@ import { clearSave, hasProgress, loadSave, storeSave } from './save.js';
 import { buildCity } from './city.js';
 import { buildWorld } from './world3d.js';
 import { createFigure } from './stick3d.js';
-import { damageCar, drivePlayerCar, spawnParkedCars, spawnTrafficCar, updatePlayerCarHits, updateTraffic } from './vehicles.js';
+import { computeTrafficWarnings, damageCar, drivePlayerCar, spawnParkedCars, spawnTrafficCar, updatePlayerCarHits, updateTraffic } from './vehicles.js';
 import { runOverPed, seatDriverFigure, spawnPeds, syncFigure, updatePeds, updatePlayerOnFoot } from './people.js';
 import { spawnCashPickup, updateBullets, updateCombat, updatePickups } from './combat.js';
 import { addHeat, updatePolice } from './police.js';
@@ -1114,6 +1114,10 @@ function frame(now) {
   syncResetBtn();
   syncLangToggle();
   if (touchUI) touchUI.update();
+  // Off-screen traffic warnings for the HUD (on foot only; the shot
+  // scenes returned above and never reach this, so their compositions
+  // stay clean).
+  computeTrafficWarnings(g);
   drawHUD(g);
   renderer.render(scene, camera);
   input.endFrame();

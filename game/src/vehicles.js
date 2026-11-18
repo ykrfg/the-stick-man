@@ -689,6 +689,82 @@ function separateTrafficCars(g) {
   }
 }
 
+const warnVec = new THREE.Vector3();
+const warnDir = new THREE.Vector3();
+
+/**
+ * Off-screen traffic warnings, recomputed each frame into
+ * g.trafficWarn for hud.js to draw: the cars a player ON FOOT cannot
+ * see but is about to meet. A car qualifies when it is close (within
+ * TRAFFIC_WARN.radius), actually moving, OFF screen (projected with
+ * the real camera; cars behind the camera count as off-screen and get
+ * their direction from the camera yaw instead), and closing — its
+ * closest point of approach to the player over the next few seconds
+ * passes within TRAFFIC_WARN.cpaDist. A car already opening the
+ * distance never warns. Police are left out on purpose: a pursuit has
+ * its own signals (stars, sirens, minimap), and a constant red edge
+ * arrow through every chase would drown the traffic warnings this
+ * exists for. Each entry is { angle, urgency, dist } with angle in
+ * screen space (atan2 of screen-down over screen-right, so hud.js can
+ * place the marker on the screen edge directly); the list is sorted
+ * most urgent first and capped.
+ */
+export function computeTrafficWarnings(g) {
+  const out = [];
+  g.trafficWarn = out;
+  const p = g.player;
+  if (g.state !== 'play' || !p || p.state !== 'foot' || !g.camera) return;
+  const cam = g.camera;
+  cam.getWorldDirection(warnDir);
+  const pvx = Math.cos(p.moveAngle ?? p.angle) * (p.speedNow ?? 0);
+  const pvy = Math.sin(p.moveAngle ?? p.angle) * (p.speedNow ?? 0);
+  // Screen axes in world terms, from the yaw the camera renders with
+  // (the same convention people.js moves the player by): right is
+  // (sin yaw, -cos yaw), down is (cos yaw, sin yaw).
+  const yaw = g.cam.yaw + Math.PI * g.cam.backBlend;
+  const rightX = Math.sin(yaw);
+  const rightY = -Math.cos(yaw);
+  const downX = Math.cos(yaw);
+  const downY = Math.sin(yaw);
+  for (const car of g.cars) {
+    if (car.kind !== 'traffic' && car.kind !== 'courier') continue;
+    if (car.wrecked || car.occupant === 'player' || Math.abs(car.speed) < 35) continue;
+    const rx = car.x - p.x;
+    const ry = car.y - p.y;
+    const dist = Math.hypot(rx, ry);
+    if (dist < 1 || dist > TRAFFIC_WARN.radius) continue;
+    // Relative motion and the closest point of approach.
+    const vx = Math.cos(car.angle) * car.speed - pvx;
+    const vy = Math.sin(car.angle) * car.speed - pvy;
+    const vv = vx * vx + vy * vy;
+    if (vv < 1) continue;
+    let tStar = -(rx * vx + ry * vy) / vv;
+    if (tStar <= 0) continue; // already opening — no warning
+    tStar = Math.min(tStar, TRAFFIC_WARN.cpaTime);
+    if (Math.hypot(rx + vx * tStar, ry + vy * tStar) > TRAFFIC_WARN.cpaDist) continue;
+    // Off-screen? Project with the real camera; a car the player can
+    // see needs no arrow.
+    let sx;
+    let sy;
+    if (rx * warnDir.x + ry * warnDir.z < 0) {
+      // Behind the camera: projection mirrors, so take the direction
+      // from the camera yaw instead.
+      sx = rx * rightX + ry * rightY;
+      sy = rx * downX + ry * downY;
+    } else {
+      warnVec.set(car.x, 10, car.y).project(cam);
+      if (warnVec.z < 1 && Math.abs(warnVec.x) <= 1.03 && Math.abs(warnVec.y) <= 1.03) continue;
+      sx = warnVec.x;
+      sy = -warnVec.y;
+    }
+    const urgency = Math.max(0, Math.min(1,
+      0.7 * (1 - tStar / TRAFFIC_WARN.cpaTime) + 0.45 * (1 - dist / TRAFFIC_WARN.radius)));
+    out.push({ angle: Math.atan2(sy, sx), urgency, dist });
+  }
+  out.sort((a, b) => b.urgency - a.urgency);
+  if (out.length > TRAFFIC_WARN.max) out.length = TRAFFIC_WARN.max;
+}
+
 /** Flash the police light bars (called for every police car each frame). */
 export function updatePoliceLights(car, time) {
   if (!car.lightL || !car.lightR) return;
