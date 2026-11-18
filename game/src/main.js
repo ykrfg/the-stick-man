@@ -18,7 +18,7 @@ import { hurtPed, seatDriverFigure, spawnPeds, syncFigure, updatePeds, updatePla
 import { spawnCashPickup, updateBullets, updateCombat, updatePickups } from './combat.js';
 import { addHeat, updatePolice } from './police.js';
 import {
-  acceptMission, failMission, missionAvailable, missionsInit, onBoarded, updateMissions,
+  acceptJob, acceptMission, failMission, jobAvailable, missionAvailable, missionsInit, onBoarded, updateMissions,
 } from './missions.js';
 import { drawHUD } from './hud.js';
 import { setupShot, tickShot } from './shots.js';
@@ -82,7 +82,7 @@ const g = {
   // RESET PROGRESS tap arms it, a second within a few seconds wipes the
   // save; any other input, or the timer running out, disarms it.
   resetArm: { armed: false, t: 0 },
-  saveData: loadSave() ?? { money: 0, missionsDone: [], hasPistol: false, earned: 0 },
+  saveData: loadSave() ?? { money: 0, missionsDone: [], hasPistol: false, earned: 0, jobsDone: 0 },
   shotMode: null,
   fixedCam: null,
   // GTA-style free camera state (play states only; the ?shot= scenes and the
@@ -212,7 +212,7 @@ function pokeReset() {
     return;
   }
   disarmReset();
-  g.saveData = { money: 0, missionsDone: [], hasPistol: false, earned: 0 };
+  g.saveData = { money: 0, missionsDone: [], hasPistol: false, earned: 0, jobsDone: 0 };
   g.money = 0;
   g.earned = 0;
   clearSave();
@@ -469,7 +469,7 @@ function updateInteractions(dt) {
   if (g.transition) return;
   if (p.state === 'foot') {
     const L = g.city.landmarks;
-    if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && missionAvailable(g)) {
+    if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
       g.prompt = 'E — Talk to Bruno';
     } else if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
       g.prompt = `E — Eat at Bruno's ($${MEAL_PRICE}) — restores health`;
@@ -550,8 +550,11 @@ function handleInteract() {
   if (g.transition) return;
   if (p.state === 'foot') {
     const L = g.city.landmarks;
-    if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && missionAvailable(g)) {
-      acceptMission(g);
+    if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
+      // Story work first: odd jobs only exist once no story job does, so
+      // this counter never has to choose between the two out loud.
+      if (missionAvailable(g)) acceptMission(g);
+      else acceptJob(g);
       return;
     }
     if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {

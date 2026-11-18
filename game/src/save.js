@@ -13,6 +13,7 @@ export function loadSave() {
     return {
       money: Number.isFinite(data.money) ? data.money : 0,
       missionsDone: Array.isArray(data.missionsDone) ? data.missionsDone.filter((n) => Number.isInteger(n)) : [],
+      jobsDone: Number.isFinite(data.jobsDone) ? data.jobsDone : 0,
       hasPistol: data.hasPistol === true,
       earned: Number.isFinite(data.earned) ? data.earned : 0,
     };

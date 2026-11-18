@@ -25,6 +25,20 @@ export function missionsInit(g) {
     rivals: [],
     shade: null,
   };
+  // Bruno's odd jobs: the free-roam work loop, unlocked once the story is
+  // done. Same shape as a mission (marker, phases, JOB DONE payoff) but
+  // repeatable forever, with a fresh destination every time.
+  g.job = {
+    active: false,
+    type: '',
+    phase: '',
+    from: null,
+    to: null,
+    shopIndex: -1,
+    rivals: [],
+    reward: 0,
+    lastType: '',
+  };
   g.markerGold = makeMarker(0xffcf3f, '!');
   g.markerRed = makeMarker(0xff5a4d, '!');
   g.markerGold.visible = false;
@@ -89,6 +103,137 @@ export function acceptMission(g) {
   g.events.push({ type: 'missionstart' });
 }
 
+// ---------------------------------------------------------------------------
+// Bruno's odd jobs — the free-roam earning loop. Unlocked only once the
+// story missions are done, so Bruno's counter never has two kinds of work
+// competing: while a story job exists it is always offered first. The two
+// kinds alternate (after a coin-flip first pick), each run is short, pays
+// through the same JOB DONE banner as the story, and counts into the same
+// earned/save totals.
+// ---------------------------------------------------------------------------
+
+export function jobAvailable(g) {
+  return !g.mission.active && !g.job.active && g.mission.index >= MISSION_TITLES.length;
+}
+
+/** Named places a delivery can start and end at: landmarks plus the shops. */
+function jobPlaces(g) {
+  const L = g.city.landmarks;
+  return [
+    { name: 'the Pier Warehouse', x: L.pier.x, y: L.pier.y },
+    { name: 'Club Neon', x: L.club.x, y: L.club.y },
+    { name: 'St. Palm Hospital', x: L.hospital.x, y: L.hospital.y },
+    { name: 'the Ammo Hut', x: L.ammo.x, y: L.ammo.y },
+    { name: "Spray 'n Go", x: L.spray.x, y: L.spray.y },
+    ...g.city.shops.map((s) => ({ name: s.name, x: s.x, y: s.y })),
+  ];
+}
+
+/** Post a job collection's two collectors at their shop door, at accept time. */
+function postJobCollectors(g) {
+  const j = g.job;
+  const shop = g.city.shops[j.shopIndex];
+  if (!shop) return;
+  j.rivals = [
+    spawnPed(g, { role: 'rival', x: shop.x + 30, y: shop.y - 16, shopIndex: j.shopIndex }),
+    spawnPed(g, { role: 'rival', x: shop.x - 26, y: shop.y + 22, shopIndex: j.shopIndex }),
+  ];
+  for (const rival of j.rivals) rival.state = 'idle';
+}
+
+/** Start the next odd job (the player talked to Bruno in free roam). */
+export function acceptJob(g) {
+  const j = g.job;
+  if (!jobAvailable(g)) return;
+  j.active = true;
+  j.rivals = [];
+  j.type = j.lastType === 'delivery'
+    ? 'collection'
+    : j.lastType === 'collection'
+      ? 'delivery'
+      : (g.rng.chance(0.5) ? 'delivery' : 'collection');
+  if (j.type === 'delivery') {
+    const places = jobPlaces(g);
+    const a = g.rng.int(0, places.length - 1);
+    let b = g.rng.int(0, places.length - 1);
+    if (b === a) b = (b + 1) % places.length;
+    j.from = places[a];
+    j.to = places[b];
+    j.phase = 'toPickup';
+    j.reward = 5 * g.rng.int(18, 28); // $90–140
+    g.say('ODD JOB — DELIVERY', `Bruno: Package waiting at ${j.from.name}. Take it to ${j.to.name}. $${j.reward} in it for you.`, 5.5);
+  } else {
+    j.shopIndex = g.rng.int(0, g.city.shops.length - 1);
+    const shop = g.city.shops[j.shopIndex];
+    j.phase = 'toShop';
+    j.reward = 5 * g.rng.int(24, 36); // $120–180
+    // Posted NOW, while the player is still at the diner: the approach
+    // shows two men waiting at the shopfront, never a pop-in at the door.
+    postJobCollectors(g);
+    g.say('ODD JOB — COLLECTION', `Bruno: ${shop.name} is late again, and its collectors disagree. Persuade them. $${j.reward}.`, 5.5);
+  }
+  g.events.push({ type: 'missionstart' });
+}
+
+function completeJob(g, line) {
+  const j = g.job;
+  j.active = false;
+  j.phase = '';
+  j.lastType = j.type;
+  hideMarkers(g);
+  g.money += j.reward;
+  g.earned += j.reward;
+  g.saveData.jobsDone = (g.saveData.jobsDone ?? 0) + 1;
+  g.events.push({ type: 'save' });
+  g.say('JOB DONE', `${line}  +$${j.reward}`, 4.5);
+  g.events.push({ type: 'missiondone' });
+}
+
+/** The odd job's per-frame work: arrivals, the fight check, the markers. */
+function updateJob(g) {
+  const j = g.job;
+  const p = g.player;
+  const near = (x, y, r) => Math.hypot(p.x - x, p.y - y) < r;
+  if (j.type === 'delivery') {
+    if (j.phase === 'toPickup') {
+      setMarker(g, g.markerGold, j.from.x, j.from.y);
+      g.markerRed.visible = false;
+      if (near(j.from.x, j.from.y, 56)) {
+        j.phase = 'toDropoff';
+        g.say('PACKAGE SECURED', `Now take it to ${j.to.name}.`, 3);
+        g.events.push({ type: 'pickup' });
+      }
+    } else if (j.phase === 'toDropoff') {
+      setMarker(g, g.markerGold, j.to.x, j.to.y);
+      g.markerRed.visible = false;
+      if (near(j.to.x, j.to.y, 56)) {
+        completeJob(g, 'Special delivery. No questions asked.');
+      }
+    }
+  } else if (j.type === 'collection') {
+    const shop = g.city.shops[j.shopIndex];
+    if (!shop) return;
+    if (j.phase === 'toShop') {
+      setMarker(g, g.markerGold, shop.x, shop.y);
+      g.markerRed.visible = false;
+      if (near(shop.x, shop.y, 52) && p.state === 'foot') {
+        // The trigger only wakes the men posted at accept time.
+        j.phase = 'fight';
+        for (const rival of j.rivals) if (rival.state === 'idle') rival.state = 'fight';
+        g.say('COLLECTORS', '"Bruno\'s tab is closed, stick."', 3);
+      }
+    } else if (j.phase === 'fight') {
+      setMarker(g, g.markerRed, shop.x, shop.y);
+      g.markerGold.visible = false;
+      if (j.rivals.every((r) => r.state === 'down')) {
+        for (const rival of j.rivals) removePed(g, rival);
+        j.rivals = [];
+        completeJob(g, `${shop.name} paid up.`);
+      }
+    }
+  }
+}
+
 /**
  * The current objective line for the HUD ('' when nothing is running). Every
  * step names its PLACE as well as its person — "come back for Shade" alone
@@ -97,7 +242,20 @@ export function acceptMission(g) {
 export function objectiveText(g) {
   const m = g.mission;
   if (!m.active) {
-    if (m.index >= MISSION_TITLES.length) return 'Free roam — Palmera is yours.';
+    const j = g.job;
+    if (j && j.active) {
+      if (j.type === 'delivery') {
+        return j.phase === 'toPickup'
+          ? `Odd job: pick up the package at ${j.from.name}.`
+          : `Odd job: deliver the package to ${j.to.name}.`;
+      }
+      const shop = g.city.shops[j.shopIndex];
+      const shopName = shop ? shop.name : 'the shop';
+      return j.phase === 'fight'
+        ? `Odd job: beat the collectors at ${shopName}!`
+        : `Odd job: collect at ${shopName} — it owes Bruno.`;
+    }
+    if (m.index >= MISSION_TITLES.length) return "Free roam — Palmera is yours. Bruno has odd jobs at Bruno's Diner.";
     return "Talk to Bruno at Bruno's Diner (E) for work.";
   }
   const shop = g.city.shops[m.shopStep];
@@ -126,9 +284,19 @@ export function objectiveTarget(g) {
   const m = g.mission;
   const L = g.city.landmarks;
   if (!m.active) {
-    if (!missionAvailable(g)) return null;
-    // Point at the man himself, not just his diner: while the "Talk to
-    // Bruno" prompt is what the game wants, Bruno is the objective.
+    const j = g.job;
+    if (j && j.active) {
+      if (j.type === 'delivery') {
+        const t = j.phase === 'toPickup' ? j.from : j.to;
+        return t ? { x: t.x, y: t.y } : null;
+      }
+      const shop = g.city.shops[j.shopIndex];
+      return shop ? { x: shop.x, y: shop.y } : null;
+    }
+    // Point at the man himself, not just his diner, while work waits at
+    // his counter — story jobs before the story is done, odd jobs after
+    // it: Bruno is the objective either way.
+    if (!missionAvailable(g) && !jobAvailable(g)) return null;
     return g.bruno ? { x: g.bruno.x, y: g.bruno.y } : { x: L.diner.x, y: L.diner.y };
   }
   switch (m.phase) {
@@ -160,23 +328,33 @@ function completeMission(g, reward, line) {
   m.index += 1;
 }
 
-/** The active mission collapses when the player is busted or wasted. */
+/** The active mission (or odd job) collapses when the player is busted or wasted. */
 export function failMission(g) {
   const m = g.mission;
-  if (!m.active) return;
-  m.active = false;
-  m.phase = '';
-  hideMarkers(g);
-  if (m.shade) {
-    removePed(g, m.shade);
-    m.shade = null;
+  if (m.active) {
+    m.active = false;
+    m.phase = '';
+    hideMarkers(g);
+    if (m.shade) {
+      removePed(g, m.shade);
+      m.shade = null;
+    }
+    if (g.passenger) {
+      g.passenger = null;
+    }
+    for (const rival of m.rivals) removePed(g, rival);
+    m.rivals = [];
+    g.say('JOB FAILED', 'Bruno still has the job, if you want it.', 3.5);
   }
-  if (g.passenger) {
-    g.passenger = null;
+  const j = g.job;
+  if (j && j.active) {
+    j.active = false;
+    j.phase = '';
+    hideMarkers(g);
+    for (const rival of j.rivals) removePed(g, rival);
+    j.rivals = [];
+    g.say('JOB FAILED', 'Bruno still has work, if you want it.', 3.5);
   }
-  for (const rival of m.rivals) removePed(g, rival);
-  m.rivals = [];
-  g.say('JOB FAILED', 'Bruno still has the job, if you want it.', 3.5);
 }
 
 /** Shade climbed into the player's car (event from people.js). */
@@ -195,10 +373,15 @@ export function updateMissions(g, dt, time) {
   g.markerGold.userData.update(time);
   g.markerRed.userData.update(time);
   if (!m.active) {
+    if (g.job.active) {
+      updateJob(g);
+      return;
+    }
     // No job running: the gold marker (and the minimap blip that follows
     // the same target) stands on Bruno himself, so the next job is always
-    // findable — the talk prompt never points at an empty doorstep.
-    if (missionAvailable(g) && g.bruno) {
+    // findable — the talk prompt never points at an empty doorstep. True
+    // for story work and, in free roam, for odd jobs alike.
+    if ((missionAvailable(g) || jobAvailable(g)) && g.bruno) {
       setMarker(g, g.markerGold, g.bruno.x, g.bruno.y);
       g.markerRed.visible = false;
     } else {
