@@ -534,12 +534,15 @@ function updateInteractions(dt) {
       }
       return;
     }
-    if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
-      g.prompt = 'E — Talk to Bruno';
-    } else if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
+    if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
+      // A hurt player at the counter eats first: Bruno's work (story or
+      // odd job) is one step to his side, and the meal would otherwise
+      // be unreachable in free roam, where a job is always on offer.
       g.prompt = `E — Eat at Bruno's ($${MEAL_PRICE}) — restores health`;
     } else if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
       g.prompt = `E — Get treated at St. Palm ($${TREAT_PRICE}) — restores health`;
+    } else if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
+      g.prompt = 'E — Talk to Bruno';
     } else if (shopDoorIndex(p) >= 0) {
       const si = shopDoorIndex(p);
       if (shopBusy(si)) {
@@ -625,19 +628,20 @@ function handleInteract() {
   if (p.state === 'foot') {
     if (g.robbery) return; // E does nothing while a hold-up is being stood through
     const L = g.city.landmarks;
-    if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
-      // Story work first: odd jobs only exist once no story job does, so
-      // this counter never has to choose between the two out loud.
-      if (missionAvailable(g)) acceptMission(g);
-      else acceptJob(g);
-      return;
-    }
     if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
       healAt("BRUNO'S", MEAL_PRICE, 'A hot meal and a cold soda.', '"No cash, no stew, stick."');
       return;
     }
     if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
       healAt('ST. PALM', TREAT_PRICE, 'Patched up and sent on your way.', 'No cash, no care — the desk nurse shakes her head.');
+      return;
+    }
+    if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
+      // Story work first: odd jobs only exist once no story job does, so
+      // this counter never has to choose between the two out loud. (A
+      // hurt player eats first — see the prompt order above.)
+      if (missionAvailable(g)) acceptMission(g);
+      else acceptJob(g);
       return;
     }
     const si = shopDoorIndex(p);
