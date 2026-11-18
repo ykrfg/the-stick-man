@@ -81,6 +81,12 @@ function baseCar(kind, x, y, angle, colorHex) {
     lightR: mesh.lightR,
     occupant: null, // 'player', a ped object, or null
     hp: 100,
+    // Knock velocity from a hard car-to-car hit (see collideCars): a free
+    // car struck at speed is shoved sideways and the shove decays over a
+    // few frames. Parked cars have no update loop to carry one, so they
+    // take their knock as immediate displacement instead.
+    shoveX: 0,
+    shoveY: 0,
     // Player ownership: once the player takes a car it is theirs — the fleet
     // systems (traffic lane-following/despawn, police chase/drive-off) must
     // never touch it again. `wrecked` is the terminal state of a car beaten
@@ -196,6 +202,31 @@ export function removeCar(g, car) {
 }
 
 /**
+ * A shoved car must stay consistent: kept inside the world, resolved out
+ * of any building it was pushed into, and with its mesh where its body
+ * actually is. Parked cars otherwise never re-sync after spawn, so a
+ * pushed one used to leave its visible mesh behind at the old spot while
+ * the real car sat somewhere else, invisible.
+ */
+function settleShovedCar(g, other) {
+  clampToWorld(other, 30);
+  resolveCircleCollision(g.city, other, CAR.radius);
+  syncCarMesh(other, 0);
+}
+
+/** Carry a car's knock velocity for one frame, decaying fast. */
+function applyShove(car, dt) {
+  if (!car.shoveX && !car.shoveY) return;
+  car.x += car.shoveX * dt;
+  car.y += car.shoveY * dt;
+  const decay = Math.max(0, 1 - 5 * dt);
+  car.shoveX *= decay;
+  car.shoveY *= decay;
+  if (Math.abs(car.shoveX) < 2) car.shoveX = 0;
+  if (Math.abs(car.shoveY) < 2) car.shoveY = 0;
+}
+
+/**
  * Move a free-driving car (player's or police) by its angle and speed, resolving
  * building collisions (with a crash event when the impact is hard), car-to-car
  * bumps and pedestrian run-overs (reported through g.events for main.js to judge).
@@ -206,6 +237,7 @@ export function moveFreeCar(g, car, dt) {
     syncCarMesh(car, dt);
     return;
   }
+  applyShove(car, dt);
   const prevSpeed = car.speed;
   car.x += Math.cos(car.angle) * car.speed * dt;
   car.y += Math.sin(car.angle) * car.speed * dt;
@@ -224,25 +256,48 @@ export function moveFreeCar(g, car, dt) {
     const rr = CAR.radius + CAR.radius - 4;
     if (d2 >= rr * rr || d2 < 0.01) continue;
     const d = Math.sqrt(d2);
+    const nx = dx / d;
+    const ny = dy / d;
+    // The impact of a bump is the CLOSING SPEED along the contact normal —
+    // how fast the gap between the two cars is shrinking — never either
+    // car's raw speed. Two cars cruising at the same speed have a closing
+    // speed of zero: they must grind against each other, not bounce apart.
+    const relVx = Math.cos(car.angle) * car.speed - Math.cos(other.angle) * (other.speed || 0);
+    const relVy = Math.sin(car.angle) * car.speed - Math.sin(other.angle) * (other.speed || 0);
+    const closing = -(relVx * nx + relVy * ny);
+    // Positional separation always applies: it is what lets a slow push
+    // grind a stopped or slower car ahead of you instead of bouncing off.
     const push = (rr - d) / 2;
-    car.x += (dx / d) * push;
-    car.y += (dy / d) * push;
-    if (other.kind !== 'parked' || Math.abs(car.speed) > 200) {
-      other.x -= (dx / d) * push * 0.5;
-      other.y -= (dy / d) * push * 0.5;
-      // A shoved car must stay consistent: kept inside the world, resolved
-      // out of any building it was pushed into, and with its mesh where its
-      // body actually is. Parked cars otherwise never re-sync after spawn,
-      // so a pushed one used to leave its visible mesh behind at the old
-      // spot while the real car sat somewhere else, invisible.
-      clampToWorld(other, 30);
-      resolveCircleCollision(g.city, other, CAR.radius);
-      syncCarMesh(other, 0);
+    car.x += nx * push;
+    car.y += ny * push;
+    if (other.kind !== 'parked' || closing > 25) {
+      other.x -= nx * push * 0.5;
+      other.y -= ny * push * 0.5;
+      settleShovedCar(g, other);
     }
-    if (Math.abs(car.speed) > 170) {
-      g.events.push({ type: 'crash', strength: 0.7, byPlayer: car.occupant === 'player' });
+    if (closing > 55) {
+      // A real impact, and its strength follows the speed DIFFERENCE (the
+      // same /420 scale as a building hit, so the crash sound, the camera
+      // shake and the hitCar heat in main.js all track the actual blow).
+      const strength = Math.min(1, closing / 420);
+      if (other.kind === 'parked') {
+        // Parked cars have no update loop to carry a shove velocity, so
+        // the knock lands as extra displacement right now.
+        const extra = Math.min(30, closing * 0.09);
+        other.x -= nx * extra;
+        other.y -= ny * extra;
+        settleShovedCar(g, other);
+      } else {
+        other.shoveX -= nx * closing * 0.75;
+        other.shoveY -= ny * closing * 0.75;
+      }
+      // The mover sheds speed in proportion to the blow: a brush at
+      // matched speed costs almost nothing, a full-tilt rear-end still
+      // costs about half. Below the threshold there is no cut at all —
+      // the grind keeps its speed and shoves the other car ahead.
+      car.speed *= 1 - 0.5 * strength;
+      g.events.push({ type: 'crash', strength, byPlayer: car.occupant === 'player' });
     }
-    car.speed *= 0.55;
   }
   if (Math.abs(car.speed) > 55) {
     for (const ped of g.peds) {
@@ -293,6 +348,9 @@ export function updateTraffic(g, dt) {
     // path (a scramble interrupted mid-enter, a scene seating) can ever
     // hand an occupied or player-owned car to the fleet logic.
     if (car.touched || car.occupant === 'player' || car.wrecked) continue;
+    // A knock from a harder car still lands: the shove's along-lane part
+    // persists (the lane glue below only re-seats the lateral coordinate).
+    applyShove(car, dt);
     // Despawn far-away traffic and respawn it elsewhere, keeping the city alive.
     const distToPlayer = Math.hypot(car.x - g.player.x, car.y - g.player.y);
     if (distToPlayer > 1500) {
