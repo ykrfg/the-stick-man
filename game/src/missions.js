@@ -103,7 +103,10 @@ export function objectiveTarget(g) {
   const m = g.mission;
   const L = g.city.landmarks;
   if (!m.active) {
-    return missionAvailable(g) ? { x: L.diner.x, y: L.diner.y } : null;
+    if (!missionAvailable(g)) return null;
+    // Point at the man himself, not just his diner: while the "Talk to
+    // Bruno" prompt is what the game wants, Bruno is the objective.
+    return g.bruno ? { x: g.bruno.x, y: g.bruno.y } : { x: L.diner.x, y: L.diner.y };
   }
   switch (m.phase) {
     case 'toWarehouse': return { x: L.pier.x, y: L.pier.y };
@@ -169,7 +172,15 @@ export function updateMissions(g, dt, time) {
   g.markerGold.userData.update(time);
   g.markerRed.userData.update(time);
   if (!m.active) {
-    hideMarkers(g);
+    // No job running: the gold marker (and the minimap blip that follows
+    // the same target) stands on Bruno himself, so the next job is always
+    // findable — the talk prompt never points at an empty doorstep.
+    if (missionAvailable(g) && g.bruno) {
+      setMarker(g, g.markerGold, g.bruno.x, g.bruno.y);
+      g.markerRed.visible = false;
+    } else {
+      hideMarkers(g);
+    }
     return;
   }
   const p = g.player;

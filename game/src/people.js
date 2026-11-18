@@ -95,6 +95,8 @@ export function spawnPeds(g, count = 15) {
   const diner = g.city.landmarks.diner;
   const bruno = spawnPed(g, { role: 'bruno', x: diner.x - 26, y: diner.y + 6, name: 'BRUNO' });
   bruno.angle = Math.PI / 2;
+  bruno.homeX = bruno.x;
+  bruno.homeY = bruno.y;
   return bruno;
 }
 
@@ -112,6 +114,16 @@ export function removePed(g, ped) {
  */
 export function hurtPed(g, ped, damage, { byPlayer = true } = {}) {
   if (ped.state === 'down' || ped.state === 'inCar') return false;
+  if (ped.role === 'bruno') {
+    // Bruno is the job desk, and he is essential: he flinches, but he can
+    // never be beaten down, run over into the 14-second removal, or turned
+    // into a fighter who abandons his post. Without this, one car through
+    // the diner door deleted him for good while the "Talk to Bruno" prompt
+    // kept firing at the empty spot his stale reference pointed to.
+    ped.fig.setExpression('frustrated');
+    ped.exprT = 0.7;
+    return false;
+  }
   ped.hp -= damage;
   ped.fig.setExpression('frustrated');
   ped.exprT = 0.7;
@@ -212,8 +224,11 @@ export function updatePlayerOnFoot(g, dt) {
   resolveCircleCollision(g.city, p, PLAYER.radius);
   clampToWorld(p, 16);
   // Do not share a spot with a pedestrian: nudge them politely aside.
+  // Bruno is never nudged: the shove has no building resolution behind it,
+  // so leaning on him used to walk him into the diner wall, where he stood
+  // inside the geometry, invisible, while his talk prompt kept firing.
   for (const ped of g.peds) {
-    if (ped.state === 'down' || ped.state === 'inCar') continue;
+    if (ped.state === 'down' || ped.state === 'inCar' || ped.role === 'bruno') continue;
     const dx = ped.x - p.x;
     const dy = ped.y - p.y;
     const d2 = dx * dx + dy * dy;
@@ -312,6 +327,20 @@ export function updatePeds(g, dt, time) {
       case 'idle': // Bruno: stands, sways, watches the street.
         ped.speedNow = 0;
         ped.angle = Math.PI / 2 + Math.sin(time * 0.4) * 0.25;
+        if (ped.role === 'bruno' && ped.homeX !== undefined) {
+          // Post-keeping: if anything ever displaces Bruno (a shove, a
+          // spawn overlap), he walks back to the diner door, so the man
+          // the talk prompt names is always standing where it points.
+          const dx = ped.homeX - ped.x;
+          const dy = ped.homeY - ped.y;
+          const d = Math.hypot(dx, dy);
+          if (d > 2) {
+            const step = Math.min(d, 92 * dt);
+            ped.x += (dx / d) * step;
+            ped.y += (dy / d) * step;
+            ped.speedNow = 60;
+          }
+        }
         break;
       case 'board': { // Shade runs for the player's car and climbs in.
         const car = p.car ?? g.nearestCar;
