@@ -204,7 +204,32 @@ export function updatePlayerOnFoot(g, dt) {
   let mx = axes.x * sin + axes.y * cos;
   let my = -axes.x * cos + axes.y * sin;
   const len = Math.hypot(mx, my);
-  if (len > 0) {
+  // --- Dash: a Space tap (the touch DASH button writes the same code)
+  // bursts in the input direction — or straight ahead with no input —
+  // at well over sprint speed for a quarter of a second, on a short
+  // cooldown. It is the on-foot escape tool: out of a forming bust
+  // circle, away from fists, across a gap in traffic. The rig needs no
+  // new pose for it: speedNow drives the stride and the spine lean.
+  p.dashCd = Math.max(0, (p.dashCd ?? 0) - dt);
+  if (g.input.tapped('Space') && p.dashCd <= 0 && !(p.dashT > 0)) {
+    if (len > 0.01) {
+      p.dashDirX = mx / len;
+      p.dashDirY = my / len;
+    } else {
+      p.dashDirX = Math.cos(p.angle);
+      p.dashDirY = Math.sin(p.angle);
+    }
+    p.dashT = PLAYER.dashTime;
+    p.dashCd = PLAYER.dashCooldown;
+  }
+  if (p.dashT > 0) {
+    p.dashT -= dt;
+    p.x += p.dashDirX * PLAYER.dashSpeed * dt;
+    p.y += p.dashDirY * PLAYER.dashSpeed * dt;
+    p.moveAngle = Math.atan2(p.dashDirY, p.dashDirX);
+    p.angle += angleArc(p.angle, p.moveAngle) * (1 - Math.exp(-18 * dt));
+    p.speedNow = PLAYER.dashSpeed;
+  } else if (len > 0) {
     // Analog stick magnitude scales the pace (a light push walks slowly);
     // keyboard axes are always full-length, so this is 1 there as before.
     const mag = Math.min(1, len);

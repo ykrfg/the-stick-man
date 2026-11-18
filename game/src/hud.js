@@ -360,6 +360,20 @@ export function drawHUD(g) {
     ctx.fillStyle = '#dfe5ee';
     ctx.fillText('CAR', 24, 85);
   }
+  if (g.player.state === 'foot') {
+    // Dash cooldown pip: full and gold when the burst is ready, refilling
+    // while it cools. (On touch the DASH button dims the same way.)
+    const cd = g.player.dashCd ?? 0;
+    const frac = 1 - Math.min(1, cd / PLAYER.dashCooldown);
+    roundRect(ctx, 18, 76, 92, 10, 4);
+    ctx.fillStyle = 'rgba(10,10,16,0.55)';
+    ctx.fill();
+    roundRect(ctx, 20, 78, 88 * frac, 6, 3);
+    ctx.fillStyle = frac >= 1 ? '#ffd94d' : '#8b93a5';
+    ctx.fill();
+    ctx.fillStyle = '#dfe5ee';
+    ctx.fillText('DASH', 24, 85);
+  }
   if (g.player.hasPistol) {
     ctx.font = '700 14px system-ui, sans-serif';
     ctx.fillStyle = '#ffd94d';

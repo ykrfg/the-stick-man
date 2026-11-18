@@ -35,6 +35,7 @@ export function initTouch(g) {
   const btnUse = $('btnUse');
   const btnShoot = $('btnShoot');
   const btnSprint = $('btnSprint');
+  const btnDash = $('btnDash');
 
   // --- Virtual joystick: dynamic origin wherever the left thumb lands. ---
   let stickId = null;
@@ -103,6 +104,8 @@ export function initTouch(g) {
   hold(btnUse, 'KeyE');
   hold($('btnPunch'), 'KeyF');
   hold(btnShoot, 'KeyK');
+  // Dash rides the Space code, exactly like the desktop key.
+  hold(btnDash, 'Space');
   // Pause is a tap, not a hold.
   btnPause.addEventListener('touchstart', (e) => {
     e.preventDefault();
@@ -199,6 +202,10 @@ export function initTouch(g) {
       lastPistol = pistol;
       btnShoot.style.display = pistol ? 'flex' : 'none';
     }
+    // Dash lives on foot only, and dims while its cooldown runs down.
+    const onFoot = state === 'play' && g.player.state === 'foot';
+    btnDash.style.display = onFoot ? 'flex' : 'none';
+    btnDash.classList.toggle('cool', onFoot && (g.player.dashCd ?? 0) > 0);
   }
   update();
   return { update };
