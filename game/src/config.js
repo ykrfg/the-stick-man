@@ -85,6 +85,20 @@ export const CAR = {
  */
 export const CRASH_DAMAGE = { mover: 21, struck: 34, wall: 40 };
 
+/**
+ * Crash-damage grace window, in seconds of game time: after a car takes
+ * a crash hit (car-to-car or wall) it takes no further CRASH damage
+ * until the window lapses. A pile-up or a wall grind is one accident
+ * spread over many contact frames; without the window every frame took
+ * another hit and a single accident drained the whole HP bar in about a
+ * second. One accident now costs roughly one hit, while separate
+ * approaches a moment apart still land one hit each, so deliberate
+ * ramming wrecks cars at a sane pace. The window gates HP only — the
+ * bounce, shove, speed loss, sound, shake and heat of every contact
+ * frame are untouched, and fist damage keeps its own pacing.
+ */
+export const CRASH_GRACE = 0.8;
+
 export const SAVE_KEY = 'the-stick-man-save-v1';
 
 /** Price of the pistol at the Ammo Hut, and the Spray 'n Go fee per wanted star. */

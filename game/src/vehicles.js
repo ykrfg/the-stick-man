@@ -4,7 +4,7 @@
 // network lane by lane, the player's arcade driving, and the shared collision
 // resolution (buildings, other cars, pedestrians) that police cars reuse.
 import * as THREE from 'three';
-import { CAR, COURIER_HP, CRASH_DAMAGE, PLAYER, ROAD, WORLD } from './config.js';
+import { CAR, COURIER_HP, CRASH_DAMAGE, CRASH_GRACE, PLAYER, ROAD, WORLD } from './config.js';
 import { clampToWorld, resolveCircleCollision } from './city.js';
 import { toonMat, basicMat } from './stick3d.js';
 
@@ -317,6 +317,26 @@ export function damageCar(g, car, amount) {
 }
 
 /**
+ * Crash damage (car-to-car and wall impacts) goes through here, never
+ * through damageCar directly: after a car takes a crash hit it is
+ * immune to further CRASH damage for CRASH_GRACE seconds. A pile-up or
+ * a wall grind holds the contact for many frames, and ungated every
+ * frame took another hit — one accident drained the whole HP bar in
+ * about a second. The window is per car and timestamped against g.time
+ * because parked cars have no update loop to tick a timer down. It
+ * gates ONLY the HP: the impact's bounce, shove, speed cut and crash
+ * event (sound/shake/heat) still happen on every contact frame, so the
+ * driving feel is unchanged. Fist damage (damageCar from main.js,
+ * direct hp in combat.js) keeps its own pacing and never comes here.
+ */
+export function crashDamageCar(g, car, amount) {
+  if (car.wrecked || !(amount > 0)) return;
+  if (g.time < (car.crashGraceUntil ?? 0)) return;
+  car.crashGraceUntil = g.time + CRASH_GRACE;
+  damageCar(g, car, amount);
+}
+
+/**
  * Move a free-driving car (player's or police) by its angle and speed, resolving
  * building collisions (with a crash event when the impact is hard), car-to-car
  * bumps and pedestrian run-overs (reported through g.events for main.js to judge).
@@ -351,7 +371,7 @@ export function moveFreeCar(g, car, dt) {
       const vy = Math.sin(car.angle) * prevSpeed;
       const closing = -(vx * (pushX / pushLen) + vy * (pushY / pushLen));
       if (closing > 80) {
-        damageCar(g, car, Math.min(1, closing / 420) * CRASH_DAMAGE.wall);
+        crashDamageCar(g, car, Math.min(1, closing / 420) * CRASH_DAMAGE.wall);
       }
     }
     car.speed = -prevSpeed * 0.22;
@@ -405,10 +425,12 @@ export function moveFreeCar(g, car, dt) {
       // the grind keeps its speed and shoves the other car ahead.
       car.speed *= 1 - 0.5 * strength;
       // Both cars pay for a real impact, the struck car more than the
-      // mover (CRASH_DAMAGE). A wrecked car takes no further damage;
-      // damageCar handles the crossing into the wreck state.
-      damageCar(g, car, strength * CRASH_DAMAGE.mover);
-      damageCar(g, other, strength * CRASH_DAMAGE.struck);
+      // mover (CRASH_DAMAGE) — through the grace window, so a contact
+      // that lasts many frames still costs only the one hit. A wrecked
+      // car takes no further damage; damageCar handles the crossing
+      // into the wreck state.
+      crashDamageCar(g, car, strength * CRASH_DAMAGE.mover);
+      crashDamageCar(g, other, strength * CRASH_DAMAGE.struck);
       g.events.push({ type: 'crash', strength, byPlayer: car.occupant === 'player' });
     }
   }
