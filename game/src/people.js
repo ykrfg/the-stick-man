@@ -66,6 +66,12 @@ export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex
     turnCd: rng.range(0, 1),
     scaredT: 0,
     downT: 0,
+    // Fighter car-dodge (updatePeds): the dive's remaining time, its
+    // cooldown, and its burst velocity. Ordinary peds never use them.
+    dodgeT: 0,
+    dodgeCd: 0,
+    dodgeX: 0,
+    dodgeY: 0,
     punchCd: rng.range(0.2, 0.7),
     exprT: 0,
     baseExpr: role === 'ped' ? 'neutral' : 'angry',
@@ -149,6 +155,30 @@ export function hurtPed(g, ped, damage, { byPlayer = true } = {}) {
     return true;
   }
   return false;
+}
+
+/**
+ * A car ran someone over (the runover event from vehicles.js). Ordinary
+ * pedestrians take the full historical damage. FIGHTERS — the mission
+ * collectors and officers on foot — take a scaled-down hit and are
+ * KNOCKED DOWN instead: the down state stands them back up into the
+ * fight after a couple of seconds, so mowing a collection fight down
+ * with a car buys the driver a knockdown, not a kill. Only a very fast
+ * impact or repeated hits (each ~8 + speed x 0.075, so three-plus
+ * solid connections) actually finish a fighter. Bruno keeps his
+ * flinch-only path through hurtPed.
+ */
+export function runOverPed(g, ped, speed, byPlayer = true) {
+  if (ped.role === 'rival' || ped.role === 'cop') {
+    hurtPed(g, ped, 8 + speed * 0.075, { byPlayer });
+    if (ped.hp > 0 && ped.state !== 'down' && ped.state !== 'inCar') {
+      ped.state = 'down';
+      ped.downT = 0;
+      ped.fig.target.down = 1;
+    }
+    return;
+  }
+  hurtPed(g, ped, 30 + speed * 0.16, { byPlayer });
 }
 
 /** Place a figure in the world and advance its pose. */
@@ -357,6 +387,57 @@ export function updatePeds(g, dt, time) {
     if (ped.label) {
       ped.label.visible = ped.state !== 'inCar'
         && Math.hypot(ped.x - p.x, ped.y - p.y) < 320;
+    }
+    // Fighter dive-dodge: collectors and officers on foot dive out of a
+    // car's path. A car bearing down on them (real speed, the fighter
+    // inside a window ahead of it and near its line) triggers a quick
+    // lateral burst — the rig reads it as a crouched dive — with a
+    // per-fighter cooldown of just over a second, so the dodge is
+    // strong but not absolute: corner him, catch him mid-recovery or
+    // mid-cooldown, or while his attention is on the fight, and the
+    // car connects. Ordinary pedestrians get none of this.
+    if (ped.role === 'rival' || ped.role === 'cop') {
+      ped.dodgeCd = Math.max(0, (ped.dodgeCd ?? 0) - dt);
+      if (!((ped.dodgeT ?? 0) > 0) && ped.dodgeCd <= 0
+        && ped.state !== 'down' && ped.state !== 'inCar' && ped.state !== 'board') {
+        for (const car of g.cars) {
+          if (car.occupant === ped) continue;
+          const cs = Math.abs(car.speed);
+          if (cs < 110) continue;
+          const fx = Math.cos(car.angle) * Math.sign(car.speed);
+          const fy = Math.sin(car.angle) * Math.sign(car.speed);
+          const rx = ped.x - car.x;
+          const ry = ped.y - car.y;
+          const ahead = rx * fx + ry * fy;
+          if (ahead < 8 || ahead > 165) continue;
+          const lat = ry * fx - rx * fy;
+          if (Math.abs(lat) > 46) continue;
+          // Dive perpendicular, to the side he is already on; a
+          // dead-centre approach dives to his right.
+          const side = lat < 0 ? -1 : 1;
+          ped.dodgeX = -fy * side * 560;
+          ped.dodgeY = fx * side * 560;
+          ped.dodgeT = 0.34;
+          ped.dodgeCd = 1.15;
+          ped.angle = Math.atan2(ped.dodgeY, ped.dodgeX);
+          break;
+        }
+      }
+      if ((ped.dodgeT ?? 0) > 0) {
+        ped.dodgeT -= dt;
+        ped.x += (ped.dodgeX ?? 0) * dt;
+        ped.y += (ped.dodgeY ?? 0) * dt;
+        const diveDecay = Math.max(0, 1 - 7 * dt);
+        ped.dodgeX = (ped.dodgeX ?? 0) * diveDecay;
+        ped.dodgeY = (ped.dodgeY ?? 0) * diveDecay;
+        ped.speedNow = Math.hypot(ped.dodgeX ?? 0, ped.dodgeY ?? 0);
+        ped.fig.target.crouch = 1;
+        resolveCircleCollision(g.city, ped, PLAYER.radius);
+        clampToWorld(ped, 16);
+        syncFigure(ped, dt, time);
+        continue;
+      }
+      ped.fig.target.crouch = 0;
     }
     switch (ped.state) {
       case 'down': {

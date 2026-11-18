@@ -14,7 +14,7 @@ import { buildCity } from './city.js';
 import { buildWorld } from './world3d.js';
 import { createFigure } from './stick3d.js';
 import { damageCar, drivePlayerCar, spawnParkedCars, spawnTrafficCar, updatePlayerCarHits, updateTraffic } from './vehicles.js';
-import { hurtPed, seatDriverFigure, spawnPeds, syncFigure, updatePeds, updatePlayerOnFoot } from './people.js';
+import { runOverPed, seatDriverFigure, spawnPeds, syncFigure, updatePeds, updatePlayerOnFoot } from './people.js';
 import { spawnCashPickup, updateBullets, updateCombat, updatePickups } from './combat.js';
 import { addHeat, updatePolice } from './police.js';
 import {
@@ -452,7 +452,9 @@ function processEvents() {
       case 'cashdrop': spawnCashPickup(g, ev.x, ev.y, ev.amount); break;
       case 'pickup': g.sfx.pickup(); break;
       case 'runover': {
-        hurtPed(g, ev.ped, 30 + ev.speed * 0.16);
+        // Fighters dive and shrug off most of a hit (people.js); the
+        // full damage lands only on ordinary pedestrians.
+        runOverPed(g, ev.ped, ev.speed);
         g.sfx.punch();
         if (ev.byPlayer) addHeat(g, HEAT_FOR.runOver, ev.ped.x, ev.ped.y);
         break;
