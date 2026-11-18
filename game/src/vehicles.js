@@ -467,13 +467,18 @@ export function updateTraffic(g, dt) {
       continue;
     }
     let targetSpeed = CAR.trafficSpeed;
-    // A car ahead in the same lane slows us down.
+    // A car ahead in my path slows us down. The corridor is wider than
+    // my lane on purpose: a car CROSSING my path at an intersection
+    // (laterally near my lane line while it passes) counts too, so
+    // traffic brakes for a crossing car instead of driving into its
+    // flank and merging with it at the corner.
     for (const other of g.cars) {
       if (other === car) continue;
-      const ahead = car.axis === 'y'
-        ? Math.abs(other.x - car.lane) < 20 && (other.y - car.y) * car.dir > 0 && (other.y - car.y) * car.dir < 74
-        : Math.abs(other.y - car.lane) < 20 && (other.x - car.x) * car.dir > 0 && (other.x - car.x) * car.dir < 74;
-      if (ahead) targetSpeed = Math.min(targetSpeed, Math.max(0, ((car.axis === 'y' ? (other.y - car.y) * car.dir : (other.x - car.x) * car.dir) - 52) * 4));
+      const lateral = car.axis === 'y' ? other.x - car.lane : other.y - car.lane;
+      const along = car.axis === 'y' ? (other.y - car.y) * car.dir : (other.x - car.x) * car.dir;
+      if (Math.abs(lateral) < 34 && along > 0 && along < 80) {
+        targetSpeed = Math.min(targetSpeed, Math.max(0, (along - 52) * 4));
+      }
     }
     car.speed += Math.max(-260 * dt, Math.min(200 * dt, targetSpeed - car.speed));
     const along = (car.axis === 'y' ? car.y : car.x) + car.dir * car.speed * dt;
@@ -516,6 +521,63 @@ export function updateTraffic(g, dt) {
       continue;
     }
     syncCarMesh(car, dt);
+  }
+  separateTrafficCars(g);
+}
+
+/**
+ * Traffic cars must never REST overlapped. Lane-following alone cannot
+ * promise that: two cars can arrive at a crossing together, and a
+ * turning car snaps laterally onto its new lane in one frame — the
+ * user's screenshot showed four or five cars interpenetrating in one
+ * stack at a corner. This pairwise pass runs once per frame after the
+ * lane updates (few traffic cars, only nearby pairs considered):
+ * overlapping cars are pushed apart along their centre line, capped
+ * per step so a three-car meeting converges over a few frames instead
+ * of exploding, and each pushed traffic car is immediately re-glued
+ * to its lane laterally — the lasting effect is along-axis spacing,
+ * i.e. a queue, not a sideways shove into the next lane. Parked cars,
+ * police cars and wrecks are immovable partners (the traffic car
+ * takes the whole correction); another traffic car shares it. The
+ * widened yield corridor in updateTraffic stops new overlaps from
+ * forming; this pass is the guarantee for the ones that still do.
+ */
+function separateTrafficCars(g) {
+  const MIN = CAR.radius * 2 - 2; // centres closer than this are interpenetrating
+  const cars = g.cars;
+  for (let i = 0; i < cars.length; i += 1) {
+    const a = cars[i];
+    if (a.kind !== 'traffic' || a.touched || a.wrecked || a.occupant === 'player') continue;
+    for (let j = 0; j < cars.length; j += 1) {
+      if (j === i) continue;
+      const b = cars[j];
+      if (b.occupant === 'player') continue;
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= MIN * MIN || d2 < 0.01) continue;
+      const d = Math.sqrt(d2);
+      const nx = dx / d;
+      const ny = dy / d;
+      const overlap = MIN - d;
+      const bMovable = b.kind === 'traffic' && !b.touched && !b.wrecked;
+      const aPush = Math.min(bMovable ? overlap / 2 : overlap, 18);
+      a.x += nx * aPush;
+      a.y += ny * aPush;
+      if (bMovable) {
+        const bPush = Math.min(overlap / 2, 18);
+        b.x -= nx * bPush;
+        b.y -= ny * bPush;
+        if (b.axis === 'y') b.x = b.lane;
+        else b.y = b.lane;
+        resolveCircleCollision(g.city, b, CAR.radius);
+        syncCarMesh(b, 0);
+      }
+      if (a.axis === 'y') a.x = a.lane;
+      else a.y = a.lane;
+      resolveCircleCollision(g.city, a, CAR.radius);
+      syncCarMesh(a, 0);
+    }
   }
 }
 
