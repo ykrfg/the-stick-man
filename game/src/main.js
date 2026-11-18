@@ -1056,14 +1056,31 @@ function frame(now) {
       // Car enter/exit transition: a crouched scramble to the door.
       if (g.transition) {
         const tr = g.transition;
-        tr.t += dt;
-        const k = Math.min(1, tr.t / tr.dur);
-        p.x = tr.fromX + (tr.doorX - tr.fromX) * k;
-        p.y = tr.fromY + (tr.doorY - tr.fromY) * k;
-        p.fig.target.crouch = Math.sin(k * Math.PI) * 0.9;
-        p.speedNow = 60;
-        syncFigure(p, dt, g.time);
-        if (k >= 1) finishEnterCar();
+        if (tr.car.wrecked || !g.cars.includes(tr.car)) {
+          // The car died (or was removed) mid-scramble: there is no
+          // seat to take, so the scramble just ends where he stands.
+          g.transition = null;
+          p.fig.target.crouch = 0;
+        } else {
+          // The door is wherever the car is NOW, not where it was when
+          // E was pressed: a moving car does not wait for a man
+          // scrambling at its side, and the old fixed door point left
+          // him arriving at an empty patch of road and teleporting in
+          // (or, to the player, looking like the car refused him).
+          // Tracking the door makes him run alongside and climb in as
+          // it rolls — and a stopped car behaves exactly as before.
+          const a = tr.car.angle;
+          tr.doorX = tr.car.x + Math.sin(a) * 34;
+          tr.doorY = tr.car.y - Math.cos(a) * 34;
+          tr.t += dt;
+          const k = Math.min(1, tr.t / tr.dur);
+          p.x = tr.fromX + (tr.doorX - tr.fromX) * k;
+          p.y = tr.fromY + (tr.doorY - tr.fromY) * k;
+          p.fig.target.crouch = Math.sin(k * Math.PI) * 0.9;
+          p.speedNow = 60;
+          syncFigure(p, dt, g.time);
+          if (k >= 1) finishEnterCar();
+        }
       } else if (p.state === 'foot') {
         updatePlayerOnFoot(g, dt);
         syncFigure(p, dt, g.time);
