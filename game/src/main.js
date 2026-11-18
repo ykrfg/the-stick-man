@@ -127,19 +127,25 @@ g.player = {
 g.player.fig.setExpression('grin');
 scene.add(g.player.fig.group);
 
-// Hero visibility fallback: a soft ring at the hero's feet and a chevron
-// above his head, drawn through buildings (depth test off). The camera code
-// shows them only while a building actually hides the hero, so he can never
-// fully disappear behind one.
+// Two different hero tells, because they solve two different problems:
+// - heroRing: a thin gold ring on the ground under the hero, ALWAYS on
+//   during play. Pedestrian heads are tinted off-white now, but in a
+//   crowd of white-headed stick figures the ring is what settles "which
+//   one is me" at a glance. In a car it widens to ring the car instead.
+// - heroMark: the chevron above his head, drawn through buildings (depth
+//   test off) and shown only while a building actually hides the hero, so
+//   he can never fully disappear behind one.
+const heroRing = new THREE.Mesh(
+  new THREE.RingGeometry(13.5, 15.2, 28),
+  new THREE.MeshBasicMaterial({ color: 0xffd94d, transparent: true, opacity: 0.55, depthTest: false, side: THREE.DoubleSide }),
+);
+heroRing.rotation.x = -Math.PI / 2;
+heroRing.renderOrder = 999;
+heroRing.visible = false;
+scene.add(heroRing);
+
 const heroMark = new THREE.Group();
 {
-  const ring = new THREE.Mesh(
-    new THREE.RingGeometry(12.5, 15.5, 28),
-    new THREE.MeshBasicMaterial({ color: 0xffd94d, transparent: true, opacity: 0.85, depthTest: false, side: THREE.DoubleSide }),
-  );
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.8;
-  ring.renderOrder = 999;
   const chev = new THREE.Mesh(
     new THREE.ConeGeometry(5.5, 11, 4),
     new THREE.MeshBasicMaterial({ color: 0xffd94d, transparent: true, opacity: 0.9, depthTest: false }),
@@ -147,7 +153,7 @@ const heroMark = new THREE.Group();
   chev.rotation.x = Math.PI; // point down at the hero
   chev.position.y = 52;
   chev.renderOrder = 999;
-  heroMark.add(ring, chev);
+  heroMark.add(chev);
   heroMark.visible = false;
   scene.add(heroMark);
 }
@@ -716,6 +722,7 @@ function updateCamera(dt) {
     camera.position.copy(camPos);
     if (camera.fov !== 55) { camera.fov = 55; camera.updateProjectionMatrix(); }
     heroMark.visible = false;
+    heroRing.visible = false;
     camera.lookAt(camLook);
     return;
   }
@@ -818,7 +825,17 @@ function updateCamera(dt) {
   heroMark.visible = blocked && (g.state === 'play' || g.state === 'paused');
   if (heroMark.visible) {
     heroMark.position.set(p.x, 0, p.y);
-    heroMark.children[1].position.y = 52 + Math.sin(g.time * 3.2) * 4;
+    heroMark.children[0].position.y = 52 + Math.sin(g.time * 3.2) * 4;
+  }
+  // The ground ring is the permanent tell: on whenever the run is live,
+  // under the hero on foot, widened around his car while he drives.
+  heroRing.visible = g.state === 'play' || g.state === 'paused';
+  if (heroRing.visible) {
+    const anchor = inCar && p.car ? p.car : p;
+    heroRing.position.set(anchor.x, 0.8, anchor.y);
+    const s = inCar ? 4.3 : 1;
+    heroRing.scale.set(s, s, 1);
+    heroRing.material.opacity = (inCar ? 0.32 : 0.5) + Math.sin(g.time * 2.6) * 0.13;
   }
 }
 

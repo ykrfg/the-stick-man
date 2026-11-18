@@ -30,6 +30,11 @@ let pedSeq = 0;
  * (black with a blue cap, arrests), 'shade' (black, the getaway passenger),
  * 'bruno' (black, stands at the diner and hands out missions).
  */
+// Pedestrian A-type heads wear warm off-whites — close to the hero's look,
+// but never his pure #ffffff: in a crowd, the one PURE white head is the
+// player's. The slight per-person variation keeps the crowd individual.
+const PED_HEAD_TINTS = [0xe7dfc9, 0xdfd7c2, 0xe9e3d3, 0xdcd4bd, 0xe2dbc9];
+
 export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex = -1 } = {}) {
   const rng = g.rng;
   let spot = { x, y, axis: 'y', line: x, dir: 1 };
@@ -41,6 +46,7 @@ export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex
   const black = role !== 'ped' ? true : rng.chance(0.35);
   const fig = createFigure({
     fill: black ? 'black' : 'white',
+    headColor: black ? undefined : rng.pick(PED_HEAD_TINTS),
     cap: role === 'cop' ? 0x2f7bff : null,
   });
   const ped = {

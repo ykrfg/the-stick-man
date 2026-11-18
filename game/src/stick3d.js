@@ -128,6 +128,8 @@ function segment(radius, length, material, jointRadius) {
 /**
  * Build one stick figure. opts: {
  *   fill: 'white' (hero type: white head disc, black stick body) | 'black' (rival: all black),
+ *   headColor: explicit head colour override (pedestrians wear off-whites so
+ *     the hero's pure white stays his alone),
  *   cap: a colour for a flat cap (police officers), or null,
  *   scale: overall size multiplier.
  * }
@@ -140,7 +142,7 @@ export function createFigure(opts = {}) {
   // Only the head differs between the two types: a white disc for the hero
   // type, black for rivals. Trunk, pelvis, chest and hands are solid black
   // stick for BOTH types, exactly like the limbs.
-  const headMat = toonMat(black ? INK : 0xffffff);
+  const headMat = toonMat(opts.headColor ?? (black ? INK : 0xffffff));
   const bodyMat = toonMat(INK);
   const limbMat = toonMat(INK);
   // Lean proportions per the character reference sheet: limbs and torso are thin
