@@ -210,10 +210,12 @@ export function createFigure(opts = {}) {
   // Arms: shoulder pivot -> upper arm -> elbow pivot -> forearm -> hand.
   // Segment lengths are tuned to the reference sheet: a relaxed arm hangs to
   // about mid-thigh (upper 8.2 + forearm/hand 7.9 from the shoulder), not to
-  // the knees as the first, longer rig did.
+  // the knees as the first, longer rig did. The pivots sit at z +-2.45, just
+  // outside the chest ball's +-2.3, and update() adds a slight outward rest
+  // angle, so the hanging shaft clears the torso instead of merging into it.
   function makeArm(side) {
     const shoulder = new THREE.Group();
-    shoulder.position.set(0, 9.8, side * 2.0);
+    shoulder.position.set(0, 9.8, side * 2.45);
     const upper = segment(limbR, 8.2, limbMat, limbR * 1.05);
     shoulder.add(upper);
     const elbow = new THREE.Group();
@@ -226,7 +228,7 @@ export function createFigure(opts = {}) {
     hand.position.y = -7.9;
     fore.add(hand);
     spine.add(shoulder);
-    return { shoulder, elbow, fore, hand };
+    return { shoulder, elbow, fore, hand, side };
   }
   const armL = makeArm(1);
   const armR = makeArm(-1);
@@ -311,6 +313,28 @@ export function createFigure(opts = {}) {
   const easeOut = (t) => 1 - Math.pow(1 - t, 3);
   const easeIn = (t) => t * t * t;
 
+  /** Punch arm curves at phase p (0..1): shoulder shove, elbow bend, spine twist. */
+  const punchPose = (p) => {
+    if (p <= 0 || p >= 1) return { shove: 0, bend: 0, tw: 0 };
+    if (p < 0.3) {
+      const k = easeOut(p / 0.3);
+      return { shove: -0.62 * k, bend: 1.5 * k, tw: -0.38 * k };
+    }
+    if (p < 0.55) {
+      const k = easeIn((p - 0.3) / 0.25);
+      return { shove: -0.62 + 2.3 * k, bend: 1.5 - 1.44 * k, tw: -0.38 + 0.68 * k };
+    }
+    const k = easeOut((p - 0.55) / 0.45);
+    return { shove: 1.68 * (1 - k), bend: 0.06 + 0.3 * k, tw: 0.3 * (1 - k) };
+  };
+  /** Normalised hip-drive curve over the punch: -1 wound back, +1 driven through. */
+  const driveAt = (p) => {
+    if (p <= 0 || p >= 1) return 0;
+    if (p < 0.3) return -easeOut(p / 0.3);
+    if (p < 0.55) return -1 + 2 * easeIn((p - 0.3) / 0.25);
+    return 1 - easeOut((p - 0.55) / 0.45);
+  };
+
   /** Solve every joint from the damped pose values. Call once per frame. */
   function update(dt, time) {
     const c = fig.cur;
@@ -332,6 +356,8 @@ export function createFigure(opts = {}) {
     const bob = Math.abs(Math.sin(ph)) * 1.5 * gait;
     const breathe = Math.sin(time * 1.7 + fig.swaySeed) * 0.22 * (1 - gait);
     pelvis.position.y = HIP_H + bob + breathe - c.crouch * 6.5 - c.drive * 13;
+    pelvis.position.x = 0; // the punch block below may drive these forward/sideways
+    pelvis.position.z = 0;
     pelvis.rotation.x = Math.sin(ph * 2 + fig.swaySeed) * 0.03 * gait; // gentle roll
     pelvis.rotation.y = Math.sin(time * 0.43 + fig.swaySeed) * 0.05 * (1 - gait); // idle weight shift
 
@@ -369,7 +395,13 @@ export function createFigure(opts = {}) {
     shL = shL * (1 - c.down) + 0.5 * c.down;
     shR = shR * (1 - c.down) - 0.4 * c.down;
 
-    // --- Punch: anticipation (wind back + twist), strike (extend + untwist), recovery. ---
+    // --- Punch: anticipation (wind back + twist), strike (extend +
+    // untwist), recovery — driven from the hips, not just the arm. The
+    // pelvis yaws INTO the punch (the punching-side hip drives forward),
+    // the weight shifts onto that leg with a dip and a forward drive, and
+    // the spine twist follows the pelvis a beat later (the whip), so the
+    // shoulder rides the combined rotation forward. `side` mirrors every
+    // term for left and right punches. ---
     if (fig.punchT >= 0) {
       fig.punchT += dt / 0.38;
       const pt = fig.punchT;
@@ -377,33 +409,29 @@ export function createFigure(opts = {}) {
         fig.punchT = -1;
       } else {
         const arm = fig.punchArm === 'R' ? 'R' : 'L';
-        let shove = 0;
-        let bend = 0;
-        let tw = 0;
-        if (pt < 0.3) {
-          const k = easeOut(pt / 0.3);
-          shove = -0.62 * k;
-          bend = 1.5 * k;
-          tw = -0.38 * k;
-        } else if (pt < 0.55) {
-          const k = easeIn((pt - 0.3) / 0.25);
-          shove = -0.62 + 2.3 * k;
-          bend = 1.5 - 1.44 * k;
-          tw = -0.38 + 0.68 * k;
-        } else {
-          const k = easeOut((pt - 0.55) / 0.45);
-          shove = 1.68 * (1 - k);
-          bend = 0.06 + 0.3 * k;
-          tw = 0.3 * (1 - k);
-        }
+        const side = arm === 'L' ? 1 : -1; // z-side of the punching arm
+        const pose = punchPose(pt);
         if (arm === 'R') {
-          shR = shove + shR * 0.15;
-          elR = bend;
+          shR = pose.shove + shR * 0.15;
+          elR = pose.bend;
         } else {
-          shL = shove + shL * 0.15;
-          elL = bend;
+          shL = pose.shove + shL * 0.15;
+          elL = pose.bend;
         }
-        twist += tw;
+        twist += side * punchPose(pt - 0.07).tw; // spine lags the pelvis: whip
+        const hd = driveAt(pt);
+        const strike = Math.max(0, hd);
+        const load = Math.max(0, -hd);
+        pelvis.rotation.y += side * 0.44 * hd;
+        pelvis.position.z += side * 1.0 * hd; // weight onto the punching-side leg
+        pelvis.position.x += 1.5 * strike; // root drives forward through the hit
+        pelvis.position.y -= 1.3 * strike + 0.5 * load; // dip: front knee bends, rear loads
+        spine.rotation.z -= 0.1 * strike; // torso leans into the strike
+        const frontLeg = side > 0 ? legL : legR;
+        const rearLeg = side > 0 ? legR : legL;
+        frontLeg.knee.rotation.z -= 0.34 * strike;
+        frontLeg.hip.rotation.z += 0.12 * strike;
+        rearLeg.hip.rotation.z -= 0.1 * strike;
       }
     }
     spine.rotation.y = twist;
@@ -412,9 +440,13 @@ export function createFigure(opts = {}) {
     armR.shoulder.rotation.z = shR;
     armL.elbow.rotation.z = elL;
     armR.elbow.rotation.z = elR;
-    // Arms hang slightly out from the body, never glued to the torso.
-    armL.shoulder.rotation.x = 0.1 + c.down * 0.5;
-    armR.shoulder.rotation.x = -0.1 - c.down * 0.4;
+    // Arms hang OUT from the body on a slight abduction, so the shaft
+    // clears the torso, chest and pelvis instead of sitting inside their
+    // silhouette. (For a hanging arm, rotation.x of -side tips the tip
+    // away from the midline; the old +-0.1 did the opposite and tilted
+    // both arms INTO the body.) Knocked out, they flop further out.
+    armL.shoulder.rotation.x = -armL.side * (0.17 + c.down * 0.5);
+    armR.shoulder.rotation.x = -armR.side * (0.17 + c.down * 0.5);
 
     // --- Whole-body fall when knocked out. ---
     tilt.rotation.x = -1.5 * easeOut(Math.min(1, c.down));
