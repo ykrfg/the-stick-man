@@ -22,6 +22,7 @@ import {
 } from './missions.js';
 import { drawHUD } from './hud.js';
 import { setupShot, tickShot } from './shots.js';
+import { detectMobile, initTouch } from './touch.js';
 
 const params = new URLSearchParams(location.search);
 const shotName = params.get('shot');
@@ -48,6 +49,7 @@ const g = {
   rng,
   input: new Input(canvas),
   sfx: new SoundFX(),
+  mobile: detectMobile(params.get('mobile') === '1'),
   state: 'title',
   time: 0,
   cars: [],
@@ -116,6 +118,10 @@ missionsInit(g);
 
 if (shotName) setupShot(g, shotName);
 
+// Smartphone mode: virtual joystick + buttons feeding g.input (touch.js).
+// Null on desktop, where nothing about the input path changes.
+const touchUI = g.mobile && !shotName ? initTouch(g) : null;
+
 // A handle for the headless play-test and screenshot scripts (and curious players
 // in devtools): the whole game state, live.
 window.__sm = g;
@@ -139,6 +145,7 @@ function resize() {
   g.viewH = h;
 }
 window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', resize);
 resize();
 
 /** The nearest car the player could climb into, or null. */
@@ -550,6 +557,7 @@ function frame(now) {
   }
   updateAudioState();
   updateCamera(dt);
+  if (touchUI) touchUI.update();
   drawHUD(g);
   renderer.render(scene, camera);
   input.endFrame();

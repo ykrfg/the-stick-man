@@ -159,12 +159,15 @@ export function updatePlayerOnFoot(g, dt) {
   let my = axes.y;
   const len = Math.hypot(mx, my);
   if (len > 0) {
+    // Analog stick magnitude scales the pace (a light push walks slowly);
+    // keyboard axes are always full-length, so this is 1 there as before.
+    const mag = Math.min(1, len);
     mx /= len;
     my /= len;
-    p.x += mx * speed * dt;
-    p.y += my * speed * dt;
+    p.x += mx * speed * mag * dt;
+    p.y += my * speed * mag * dt;
     p.angle = Math.atan2(my, mx);
-    p.speedNow = speed;
+    p.speedNow = speed * mag;
   } else {
     p.speedNow = 0;
   }

@@ -71,10 +71,12 @@ function logoFigure(ctx, x, y, s, fill, mouth) {
 }
 
 function drawMinimap(g, ctx) {
-  const W = 196;
-  const H = 148;
+  // On phones the map shrinks and moves under the top-left HUD bars, clear of
+  // the joystick (bottom-left) and the buttons (bottom-right).
+  const W = g.mobile ? 118 : 196;
+  const H = g.mobile ? 88 : 148;
   const x0 = 14;
-  const y0 = g.viewH - H - 14;
+  const y0 = g.mobile ? 148 : g.viewH - H - 14;
   const sx = W / WORLD.width;
   const sy = H / WORLD.height;
   ctx.save();
@@ -152,7 +154,57 @@ function drawMinimap(g, ctx) {
   ctx.restore();
 }
 
+/** Portrait-phone title: scaled type, stacked touch instructions, no ENTER. */
+function drawTitleMobile(g, ctx) {
+  const { viewW: w, viewH: h } = g;
+  ctx.fillStyle = 'rgba(16,20,34,0.55)';
+  ctx.fillRect(0, 0, w, h);
+  const cx = w / 2;
+  ctx.textAlign = 'center';
+  let titleSize = Math.min(52, w * 0.128);
+  ctx.font = `900 ${titleSize}px system-ui, sans-serif`;
+  while (titleSize > 20 && ctx.measureText('THE STICK MAN').width > w - 18) {
+    titleSize -= 2;
+    ctx.font = `900 ${titleSize}px system-ui, sans-serif`;
+  }
+  ctx.fillStyle = '#ffd94d';
+  ctx.lineWidth = 9;
+  ctx.strokeStyle = '#17181c';
+  ctx.strokeText('THE STICK MAN', cx, 104);
+  ctx.fillText('THE STICK MAN', cx, 104);
+  ctx.font = '600 14.5px system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('A tiny toon crime spree in Palmera', cx, 132);
+  logoFigure(ctx, cx - 68, 224, 1.0, '#ffffff', 'grin');
+  logoFigure(ctx, cx + 68, 224, 1.0, '#17181c', 'flat');
+  ctx.font = '500 15.5px system-ui, sans-serif';
+  ctx.fillStyle = '#e8ecf4';
+  const lines = [
+    'Left thumb — move · drive',
+    'Right buttons — USE · PUNCH · SHOOT',
+    'USE — steal cars, talk, take jobs',
+    'SPRINT — tap to toggle',
+    'Steal cars. Run jobs for Bruno.',
+    'Mind the stars.',
+  ];
+  lines.forEach((line, i) => ctx.fillText(line, cx, 306 + i * 27));
+  const save = g.saveData;
+  const jobsDone = save && Array.isArray(save.missionsDone) ? save.missionsDone.length : 0;
+  if (save && (save.money > 0 || jobsDone > 0)) {
+    ctx.font = '700 16px system-ui, sans-serif';
+    ctx.fillStyle = '#7dff8a';
+    ctx.fillText(`Saved run — $${save.money} · ${jobsDone} job(s) done`, cx, 306 + lines.length * 27 + 14);
+  }
+  ctx.font = '500 12px system-ui, sans-serif';
+  ctx.fillStyle = '#aab3c5';
+  ctx.fillText('An original stick-figure game.', cx, h - 22);
+}
+
 function drawTitle(g, ctx) {
+  if (g.mobile) {
+    drawTitleMobile(g, ctx);
+    return;
+  }
   const { viewW: w, viewH: h } = g;
   ctx.fillStyle = 'rgba(16,20,34,0.55)';
   ctx.fillRect(0, 0, w, h);
@@ -193,23 +245,44 @@ function drawTitle(g, ctx) {
   ctx.fillText('An original stick-figure game. Any resemblance to other cities is purely geographical.', cx, h - 26);
 }
 
+/** Word-wrap a line of text to a pixel width; returns the wrapped lines. */
+function wrapText(ctx, text, maxW) {
+  const words = text.split(' ');
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (line && ctx.measureText(next).width > maxW) {
+      lines.push(line);
+      line = word;
+    } else line = next;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
 function drawEndScreen(g, ctx, title, color, sub) {
   const { viewW: w, viewH: h } = g;
   ctx.fillStyle = 'rgba(10,10,18,0.62)';
   ctx.fillRect(0, 0, w, h);
   ctx.textAlign = 'center';
-  ctx.font = '900 84px system-ui, sans-serif';
+  const titleSize = g.mobile ? Math.min(64, w * 0.16) : 84;
+  ctx.font = `900 ${titleSize}px system-ui, sans-serif`;
   ctx.lineWidth = 13;
   ctx.strokeStyle = '#17181c';
   ctx.fillStyle = color;
   ctx.strokeText(title, w / 2, h / 2 - 30);
   ctx.fillText(title, w / 2, h / 2 - 30);
-  ctx.font = '600 22px system-ui, sans-serif';
+  ctx.font = `600 ${g.mobile ? 16 : 22}px system-ui, sans-serif`;
   ctx.fillStyle = '#ffffff';
-  ctx.fillText(sub, w / 2, h / 2 + 22);
-  ctx.font = '700 20px system-ui, sans-serif';
-  ctx.fillStyle = '#7dff8a';
-  ctx.fillText('Press ENTER to keep going', w / 2, h / 2 + 62);
+  if (g.mobile) {
+    wrapText(ctx, sub, w - 40).forEach((line, i) => ctx.fillText(line, w / 2, h / 2 + 16 + i * 23));
+  } else {
+    ctx.fillText(sub, w / 2, h / 2 + 22);
+    ctx.font = '700 20px system-ui, sans-serif';
+    ctx.fillStyle = '#7dff8a';
+    ctx.fillText('Press ENTER to keep going', w / 2, h / 2 + 62);
+  }
 }
 
 /** Draw everything for the current frame. */
@@ -263,7 +336,7 @@ export function drawHUD(g) {
   if (g.player.hasPistol) {
     ctx.font = '700 14px system-ui, sans-serif';
     ctx.fillStyle = '#ffd94d';
-    ctx.fillText('PISTOL — K / click to shoot', 18, 104);
+    ctx.fillText(g.mobile ? 'PISTOL — SHOOT button' : 'PISTOL — K / click to shoot', 18, 104);
   }
   if (g.toast && g.toast.t > 0) {
     ctx.font = '800 20px system-ui, sans-serif';
@@ -290,33 +363,44 @@ export function drawHUD(g) {
     ctx.fill();
   }
 
-  // Objective, top-center.
+  // Objective, top-center (shrinks to fit narrow phone screens).
   const objective = objectiveText(g);
   if (objective) {
-    ctx.font = '600 17px system-ui, sans-serif';
-    const tw = ctx.measureText(objective).width + 34;
-    roundRect(ctx, (w - tw) / 2, 14, tw, 32, 9);
+    // Phones: below the money/stars row, and narrower than the screen so the
+    // banner never slides under the pause button at the top-right.
+    const maxTw = g.mobile ? w - 108 : w - 30;
+    let objSize = 17;
+    ctx.font = `600 ${objSize}px system-ui, sans-serif`;
+    while (objSize > 11 && ctx.measureText(`▸ ${objective}`).width + 34 > maxTw) {
+      objSize -= 1.5;
+      ctx.font = `600 ${objSize}px system-ui, sans-serif`;
+    }
+    const tw = Math.min(maxTw, ctx.measureText(objective).width + 34);
+    const oy = g.mobile ? 84 : 14;
+    const ocx = g.mobile ? 12 + maxTw / 2 : w / 2;
+    roundRect(ctx, ocx - tw / 2, oy, tw, 32, 9);
     ctx.fillStyle = 'rgba(12,16,26,0.72)';
     ctx.fill();
     ctx.fillStyle = '#ffd94d';
     ctx.textAlign = 'center';
-    ctx.fillText(`▸ ${objective}`, w / 2, 36);
+    ctx.fillText(`▸ ${objective}`, ocx, oy + 22);
     ctx.textAlign = 'left';
   }
 
   // Bust meter under the objective.
   if (g.bustProgress > 0.04 && g.stars > 0) {
     const bw = 240;
-    roundRect(ctx, (w - bw) / 2, 56, bw, 15, 6);
+    const by = g.mobile ? 124 : 56;
+    roundRect(ctx, (w - bw) / 2, by, bw, 15, 6);
     ctx.fillStyle = 'rgba(10,10,16,0.65)';
     ctx.fill();
-    roundRect(ctx, (w - bw) / 2 + 2, 58, (bw - 4) * (g.bustProgress / g.bustMax), 11, 5);
+    roundRect(ctx, (w - bw) / 2 + 2, by + 2, (bw - 4) * (g.bustProgress / g.bustMax), 11, 5);
     ctx.fillStyle = '#5aa2ff';
     ctx.fill();
     ctx.font = '800 12px system-ui, sans-serif';
     ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'center';
-    ctx.fillText('BUSTED?', w / 2, 68);
+    ctx.fillText('BUSTED?', w / 2, by + 12);
     ctx.textAlign = 'left';
   }
 
@@ -327,32 +411,45 @@ export function drawHUD(g) {
     ctx.save();
     ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
     ctx.textAlign = 'center';
-    ctx.font = '900 40px system-ui, sans-serif';
+    const mk = g.mobile ? Math.min(1, w / 760) : 1;
+    // Phones: the banner drops below the minimap so the map never covers it.
+    const my = g.mobile ? 266 : 138;
+    ctx.font = `900 ${Math.round(40 * mk)}px system-ui, sans-serif`;
     ctx.lineWidth = 9;
     ctx.strokeStyle = 'rgba(10,10,18,0.8)';
     ctx.fillStyle = '#ffffff';
-    ctx.strokeText(m.title, w / 2, 138);
-    ctx.fillText(m.title, w / 2, 138);
+    ctx.strokeText(m.title, w / 2, my);
+    ctx.fillText(m.title, w / 2, my);
     if (m.sub) {
-      ctx.font = '600 19px system-ui, sans-serif';
+      ctx.font = `600 ${Math.round(19 * mk)}px system-ui, sans-serif`;
       ctx.lineWidth = 6;
-      ctx.strokeText(m.sub, w / 2, 168);
-      ctx.fillText(m.sub, w / 2, 168);
+      if (g.mobile) {
+        wrapText(ctx, m.sub, w - 36).forEach((line, i) => {
+          ctx.strokeText(line, w / 2, my + 30 + i * 20);
+          ctx.fillText(line, w / 2, my + 30 + i * 20);
+        });
+      } else {
+        ctx.strokeText(m.sub, w / 2, 168);
+        ctx.fillText(m.sub, w / 2, 168);
+      }
     }
     ctx.restore();
     ctx.textAlign = 'left';
   }
 
-  // Interaction prompt, bottom-center.
-  if (g.prompt) {
-    ctx.font = '700 18px system-ui, sans-serif';
+  // Interaction prompt, bottom-center. On phones the "E — …" prompts live on
+  // the USE button instead, so only other prompts (the spray garage) draw here,
+  // lifted clear of the button cluster.
+  if (g.prompt && !(g.mobile && g.prompt.startsWith('E — '))) {
+    ctx.font = `700 ${g.mobile ? 15.5 : 18}px system-ui, sans-serif`;
     const tw = ctx.measureText(g.prompt).width + 30;
-    roundRect(ctx, (w - tw) / 2, h - 52, tw, 34, 9);
+    const py = g.mobile ? h - 178 : h - 52;
+    roundRect(ctx, (w - tw) / 2, py, tw, 34, 9);
     ctx.fillStyle = 'rgba(12,16,26,0.78)';
     ctx.fill();
     ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'center';
-    ctx.fillText(g.prompt, w / 2, h - 29);
+    ctx.fillText(g.prompt, w / 2, py + 23);
     ctx.textAlign = 'left';
   }
 
@@ -362,12 +459,15 @@ export function drawHUD(g) {
     ctx.fillStyle = 'rgba(10,12,20,0.6)';
     ctx.fillRect(0, 0, w, h);
     ctx.textAlign = 'center';
-    ctx.font = '900 54px system-ui, sans-serif';
+    ctx.font = `900 ${g.mobile ? 42 : 54}px system-ui, sans-serif`;
     ctx.fillStyle = '#ffffff';
     ctx.fillText('PAUSED', w / 2, h / 2 - 10);
-    ctx.font = '600 18px system-ui, sans-serif';
+    ctx.font = `600 ${g.mobile ? 15 : 18}px system-ui, sans-serif`;
     ctx.fillStyle = '#c8d2e0';
-    ctx.fillText('P to resume · E enter car · F punch · K shoot · M mute', w / 2, h / 2 + 26);
+    ctx.fillText(
+      g.mobile ? 'Tap RESUME to keep playing' : 'P to resume · E enter car · F punch · K shoot · M mute',
+      w / 2, h / 2 + 26,
+    );
     ctx.textAlign = 'left';
   }
 }
