@@ -58,9 +58,95 @@ function spawnPoint(g) {
   return null;
 }
 
+/** Deploy distance: a police car hunting a man on foot stops this far
+ * short of him and sends its officer out. Against an on-foot player
+ * the car is never the weapon — the arrest happens on foot. */
+const DEPLOY_DIST = 95;
+
+/**
+ * Steer one police car after an ON-FOOT player: approach, brake on a
+ * curve that lands the stop DEPLOY_DIST short of him, and put the
+ * officer out (the deployment rule the ram path always had, but could
+ * never reach — the car arrived AT the player at full speed and the
+ * on-foot hit finished him long before any arrest). While the officer
+ * works, the car waits where it stopped; if the player leaves the
+ * car's neighbourhood entirely, the car repositions to a fresh stop
+ * near him and may deploy again once no officer is already on him.
+ * The braking curve (brake 300) sits well under what the speed
+ * approach can deliver (500), so the stop tracks with room to spare;
+ * and updatePlayerCarHits refuses police-car damage to an on-foot
+ * player outright, so even a forced contact cannot hurt him.
+ */
+function chaseOnFoot(g, car, dt) {
+  const p = g.player;
+  const dx = p.x - car.x;
+  const dy = p.y - car.y;
+  const dist = Math.hypot(dx, dy);
+  if (car.officerSpawned) {
+    if (dist < 380) {
+      // The officer is out and working: the car holds its stop.
+      const step = 500 * dt;
+      car.speed = Math.abs(car.speed) <= step ? 0 : car.speed - Math.sign(car.speed) * step;
+      moveFreeCar(g, car, dt);
+      return;
+    }
+    // The player is long gone from this car: it may deploy again —
+    // once no officer is already working him — so the pursuit renews
+    // at his new position instead of camping an empty street. (The
+    // abandoned officer keeps his own lifecycle: he stands down when
+    // the heat dies and despawns when left far behind.)
+    const officerBusy = g.peds.some((ped) => ped.role === 'cop' && ped.state === 'fight'
+      && Math.hypot(ped.x - p.x, ped.y - p.y) < 470);
+    if (!officerBusy) car.officerSpawned = false;
+  }
+  const desired = Math.atan2(dy, dx);
+  let diff = desired - car.angle;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  if (car.reverseT > 0) {
+    car.reverseT -= dt;
+    car.speed = -150;
+    car.angle -= Math.sign(diff || 1) * 1.8 * dt;
+  } else {
+    const top = CAR.policeSpeed * (g.stars >= 3 ? 1 : 0.82);
+    const curve = Math.sqrt(2 * 300 * Math.max(0, dist - DEPLOY_DIST));
+    let wanted = Math.min(top, curve);
+    if (Math.abs(diff) > 2.1) wanted = Math.min(wanted, 110);
+    car.speed += Math.max(-500 * dt, Math.min(300 * dt, wanted - car.speed));
+    car.angle += Math.max(-2.5 * dt, Math.min(2.5 * dt, diff));
+    // The ram path's stuck detection, scoped to the approach: near
+    // the stop point a slow car is doing its job, not stuck.
+    if (Math.abs(car.speed) < 22 && dist > 170) {
+      car.stuckT = (car.stuckT ?? 0) + dt;
+      if (car.stuckT > 1.1) {
+        car.reverseT = 0.55;
+        car.stuckT = 0;
+      }
+    } else {
+      car.stuckT = 0;
+    }
+  }
+  moveFreeCar(g, car, dt);
+  // The officer climbs out once the car has stopped near the player.
+  if (!car.officerSpawned && Math.abs(car.speed) < 65) {
+    if (Math.hypot(p.x - car.x, p.y - car.y) < 105) {
+      car.officerSpawned = true;
+      const officer = spawnPed(g, { role: 'cop', x: car.x + 20, y: car.y + 10 });
+      officer.state = 'fight';
+      g.events.push({ type: 'officer' });
+    }
+  }
+}
+
 /** Steer one police car after the player for a frame. */
 function chasePlayer(g, car, dt) {
   const p = g.player;
+  // On foot, the arrest happens on foot: the car stops and deploys.
+  // In a car, the chase is a chase — ramming included — as before.
+  if (p.state === 'foot') {
+    chaseOnFoot(g, car, dt);
+    return;
+  }
   const tx = p.x + Math.cos(p.angle) * (p.state === 'car' ? 0 : 0);
   const ty = p.y + Math.sin(p.angle) * (p.state === 'car' ? 0 : 0);
   const desired = Math.atan2(ty - car.y, tx - car.x);
@@ -87,15 +173,6 @@ function chasePlayer(g, car, dt) {
     }
   }
   moveFreeCar(g, car, dt);
-  // An officer climbs out when the car is stopped near a player on foot.
-  if (!car.officerSpawned && p.state === 'foot' && Math.abs(car.speed) < 65) {
-    if (Math.hypot(p.x - car.x, p.y - car.y) < 105) {
-      car.officerSpawned = true;
-      const officer = spawnPed(g, { role: 'cop', x: car.x + 20, y: car.y + 10 });
-      officer.state = 'fight';
-      g.events.push({ type: 'officer' });
-    }
-  }
 }
 
 /** The whole wanted system for one frame: spawning, chasing, cooling, busting. */

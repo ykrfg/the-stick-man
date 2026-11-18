@@ -473,8 +473,15 @@ export function updatePlayerCarHits(g) {
     const nx = dx / d;
     const ny = dy / d;
     const speed = Math.abs(car.speed);
-    if (speed <= 55) {
-      // Slow roll: no damage, just out of the way.
+    if (speed <= 55 || car.kind === 'police') {
+      // Slow roll: no damage, just out of the way. Police cars take
+      // this branch at ANY speed: against an on-foot player the car
+      // is never the weapon (police.js brakes them to a deploy stop
+      // and sends officers out — the arrest happens on foot), so a
+      // forced contact, like stepping out of a car into a braking
+      // cruiser, shoves him aside instead of running him down. A
+      // pursuit that could only end in WASTED, never BUSTED, was the
+      // bug this answers. Traffic cars keep the speed rule above.
       p.x = car.x + nx * PLAYER_HIT_RANGE;
       p.y = car.y + ny * PLAYER_HIT_RANGE;
       continue;
