@@ -4,6 +4,7 @@
 // and the joystick writes input.stick — so no gameplay code knows or cares
 // which device is driving. Desktop (no touch, or a large screen) never
 // initialises this module and behaves exactly as before.
+import { PROMPT_PREFIX, t } from './i18n.js';
 
 /**
  * True when this looks like a phone: touch support and a small screen.
@@ -177,6 +178,16 @@ export function initTouch(g) {
   let lastState = '';
   let lastPrompt = null;
   let lastPistol = null;
+  let lastLang = null;
+  /** (Re)label every button in the current language. */
+  function relabel() {
+    $('btnPunch').textContent = t('touch.punch');
+    btnShoot.textContent = t('touch.shoot');
+    btnSprint.textContent = t('touch.sprint');
+    btnDash.textContent = t('touch.dash');
+    lastState = ''; // force update() to re-derive the state button's label
+    lastPrompt = null; // and the USE button's
+  }
   function update() {
     const state = g.state;
     const inRun = state === 'play' || state === 'paused';
@@ -186,15 +197,18 @@ export function initTouch(g) {
       btns.style.display = inRun ? 'block' : 'none';
       btnPause.style.display = inRun ? 'block' : 'none';
       tapBtn.style.display = state === 'play' ? 'none' : 'block';
-      tapBtn.textContent = state === 'title' ? 'TAP TO START'
-        : state === 'paused' ? 'RESUME' : 'TAP TO CONTINUE';
+      tapBtn.textContent = state === 'title' ? t('touch.tapStart')
+        : state === 'paused' ? t('touch.resume') : t('touch.tapContinue');
       if (state !== 'play' && stickId !== null) stickEnd();
     }
     // The USE button wears the current prompt ("E — Talk to Bruno" → that).
+    // The "E — " key-cap prefix is the same in both languages (i18n.js),
+    // so the derivation — strip the prefix, shout what is left — works
+    // unchanged for Japanese prompts.
     const prompt = g.prompt ?? '';
     if (prompt !== lastPrompt) {
       lastPrompt = prompt;
-      btnUse.textContent = prompt.startsWith('E — ') ? prompt.slice(4).toUpperCase() : 'USE';
+      btnUse.textContent = prompt.startsWith(PROMPT_PREFIX) ? prompt.slice(PROMPT_PREFIX.length).toUpperCase() : t('touch.use');
       btnUse.classList.toggle('on', prompt.length > 0);
     }
     const pistol = g.player.hasPistol && state === 'play' && g.player.state === 'foot';
@@ -206,7 +220,14 @@ export function initTouch(g) {
     const onFoot = state === 'play' && g.player.state === 'foot';
     btnDash.style.display = onFoot ? 'flex' : 'none';
     btnDash.classList.toggle('cool', onFoot && (g.player.dashCd ?? 0) > 0);
+    // A language switch re-labels the static buttons once (main.js also
+    // calls relabel() directly; this keeps update() self-sufficient).
+    if (g.lang !== lastLang) {
+      lastLang = g.lang;
+      relabel();
+    }
   }
+  relabel();
   update();
-  return { update };
+  return { update, relabel };
 }

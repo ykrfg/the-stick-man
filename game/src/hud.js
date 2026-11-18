@@ -7,6 +7,7 @@ import { HEAT_THRESHOLDS, PLAYER, ROAD, WORLD } from './config.js';
 import { objectiveTarget, objectiveText } from './missions.js';
 import { hasProgress } from './save.js';
 import { starsFor } from './police.js';
+import { PROMPT_PREFIX, t } from './i18n.js';
 
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
@@ -184,21 +185,11 @@ function drawTitleMobile(g, ctx) {
   ctx.fillText('THE STICK MAN', cx, titleY);
   ctx.font = '600 14.5px system-ui, sans-serif';
   ctx.fillStyle = '#ffffff';
-  ctx.fillText('A tiny toon crime spree in Palmera', cx, titleY + 28);
+  ctx.fillText(t('title.subtitle.mobile'), cx, titleY + 28);
   const figY = titleY + (compact ? 104 : 120);
   logoFigure(ctx, cx - 68, figY, 1.0, '#ffffff', 'grin');
   logoFigure(ctx, cx + 68, figY, 1.0, '#17181c', 'flat');
-  const lines = [
-    'Left thumb — move · drive',
-    'Drag open screen — swing camera',
-    'Right buttons — USE · PUNCH · SHOOT',
-    'USE — steal cars, talk, take jobs',
-    'SPRINT — tap to toggle',
-    'DASH — burst of speed on foot',
-    "Heal at Bruno's / St. Palm · repair at Spray 'n Go",
-    'Lose the cops — hide till the stars fade',
-    'Free roam pays — odd jobs · hold up shops',
-  ];
+  const lines = [0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => t(`help.mobile.${i}`));
   const save = g.saveData;
   const jobsDone = save && Array.isArray(save.missionsDone) ? save.missionsDone.length : 0;
   const showSave = !!(save && (save.money > 0 || jobsDone > 0));
@@ -218,17 +209,17 @@ function drawTitleMobile(g, ctx) {
   if (showSave) {
     ctx.font = `700 ${Math.max(13, Math.min(16, rowH * 0.64))}px system-ui, sans-serif`;
     ctx.fillStyle = '#7dff8a';
-    ctx.fillText(`Saved run — $${save.money} · ${jobsDone} job(s) done`, cx, y);
+    ctx.fillText(t('title.savedRun', { money: save.money, jobs: jobsDone }), cx, y);
     y += rowH;
   }
   if (showReset) {
     ctx.font = `500 ${Math.max(11.5, Math.min(12.5, rowH * 0.5))}px system-ui, sans-serif`;
     if (g.resetArm?.armed) {
       ctx.fillStyle = '#ff8a7a';
-      ctx.fillText('Tap RESET PROGRESS again to confirm!', cx, y);
+      ctx.fillText(t('title.resetArmed.mobile'), cx, y);
     } else {
       ctx.fillStyle = '#8b93a5';
-      ctx.fillText('RESET PROGRESS (bottom-left) starts over', cx, y);
+      ctx.fillText(t('title.resetHint.mobile'), cx, y);
     }
   }
   // The footer shares the bottom-left corner with the DOM reset button;
@@ -237,7 +228,7 @@ function drawTitleMobile(g, ctx) {
   if (!showReset) {
     ctx.font = '500 12px system-ui, sans-serif';
     ctx.fillStyle = '#aab3c5';
-    ctx.fillText('An original stick-figure game.', cx, h - 22);
+    ctx.fillText(t('title.footer.mobile'), cx, h - 22);
   }
 }
 
@@ -259,45 +250,35 @@ function drawTitle(g, ctx) {
   ctx.fillText('THE STICK MAN', cx, 128);
   ctx.font = '600 21px system-ui, sans-serif';
   ctx.fillStyle = '#ffffff';
-  ctx.fillText('A tiny toon crime spree in the city of Palmera', cx, 164);
+  ctx.fillText(t('title.subtitle.desktop'), cx, 164);
   logoFigure(ctx, cx - 120, 268, 1.25, '#ffffff', 'grin');
   logoFigure(ctx, cx + 120, 268, 1.25, '#17181c', 'flat');
   ctx.font = '500 19px system-ui, sans-serif';
   ctx.fillStyle = '#e8ecf4';
-  const lines = [
-    'WASD / Arrows — move        Shift — sprint        Space — dash',
-    'E — enter / exit car, talk        F or J — punch',
-    'K or mouse click — shoot (once you have the pistol)',
-    'Right-drag mouse — camera        Wheel — zoom',
-    'Q (hold) — look back        P — pause        M — mute',
-    "Heal: eat at Bruno's · treatment at St. Palm · repairs at Spray 'n Go",
-    "Lose the cops: break line of sight — heat cools, stars fade. Spray 'n Go wipes it, for a price.",
-    'Free roam pays: odd jobs from Bruno — or hold up a shop (E).',
-    'Steal cars. Run jobs for Bruno. Mind the stars.',
-  ];
+  const lines = [0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => t(`help.desktop.${i}`));
   lines.forEach((line, i) => ctx.fillText(line, cx, 350 + i * 28));
   const save = g.saveData;
   ctx.font = '700 22px system-ui, sans-serif';
   ctx.fillStyle = '#7dff8a';
   const jobsDone = save && Array.isArray(save.missionsDone) ? save.missionsDone.length : 0;
   if (save && (save.money > 0 || jobsDone > 0)) {
-    ctx.fillText(`CONTINUE — $${save.money} · ${jobsDone} job(s) done — press ENTER`, cx, 350 + lines.length * 28 + 26);
+    ctx.fillText(t('title.continueRun', { money: save.money, jobs: jobsDone }), cx, 350 + lines.length * 28 + 26);
   } else {
-    ctx.fillText('Press ENTER to start', cx, 350 + lines.length * 28 + 26);
+    ctx.fillText(t('title.pressEnter'), cx, 350 + lines.length * 28 + 26);
   }
   if (hasProgress(save)) {
     ctx.font = '600 16px system-ui, sans-serif';
     if (g.resetArm?.armed) {
       ctx.fillStyle = '#ff8a7a';
-      ctx.fillText('Press R again to CONFIRM reset — your save will be wiped!', cx, 350 + lines.length * 28 + 58);
+      ctx.fillText(t('title.resetArmed.desktop'), cx, 350 + lines.length * 28 + 58);
     } else {
       ctx.fillStyle = '#8b93a5';
-      ctx.fillText('R — reset progress', cx, 350 + lines.length * 28 + 58);
+      ctx.fillText(t('title.resetHint.desktop'), cx, 350 + lines.length * 28 + 58);
     }
   }
   ctx.font = '500 15px system-ui, sans-serif';
   ctx.fillStyle = '#aab3c5';
-  ctx.fillText('An original stick-figure game. Any resemblance to other cities is purely geographical.', cx, h - 26);
+  ctx.fillText(t('title.footer.desktop'), cx, h - 26);
 }
 
 /** Word-wrap a line of text to a pixel width; returns the wrapped lines. */
@@ -336,7 +317,7 @@ function drawEndScreen(g, ctx, title, color, sub) {
     ctx.fillText(sub, w / 2, h / 2 + 22);
     ctx.font = '700 20px system-ui, sans-serif';
     ctx.fillStyle = '#7dff8a';
-    ctx.fillText('Press ENTER to keep going', w / 2, h / 2 + 62);
+    ctx.fillText(t('end.pressEnter'), w / 2, h / 2 + 62);
   }
 }
 
@@ -350,11 +331,11 @@ export function drawHUD(g) {
     return;
   }
   if (g.state === 'busted') {
-    drawEndScreen(g, ctx, 'BUSTED', '#5aa2ff', `The Palmera PD thanks you for your cooperation. Fine: $${g.lastFine}. Your wheels stay where you left them.`);
+    drawEndScreen(g, ctx, t('busted.title'), '#5aa2ff', t('busted.sub', { fine: g.lastFine }));
     return;
   }
   if (g.state === 'wasted') {
-    drawEndScreen(g, ctx, 'WASTED', '#ff5a4d', `St. Palm Hospital patched you up. Bill: $${g.lastFine}. Bruno is waiting.`);
+    drawEndScreen(g, ctx, t('wasted.title'), '#ff5a4d', t('wasted.sub', { fine: g.lastFine }));
     return;
   }
 
@@ -386,7 +367,7 @@ export function drawHUD(g) {
     ctx.fillStyle = '#9aa3ad';
     ctx.fill();
     ctx.fillStyle = '#dfe5ee';
-    ctx.fillText('CAR', 24, 85);
+    ctx.fillText(t('hud.car'), 24, 85);
   }
   if (g.player.state === 'foot') {
     // Dash cooldown pip: full and gold when the burst is ready, refilling
@@ -400,12 +381,12 @@ export function drawHUD(g) {
     ctx.fillStyle = frac >= 1 ? '#ffd94d' : '#8b93a5';
     ctx.fill();
     ctx.fillStyle = '#dfe5ee';
-    ctx.fillText('DASH', 24, 85);
+    ctx.fillText(t('hud.dash'), 24, 85);
   }
   if (g.player.hasPistol) {
     ctx.font = '700 14px system-ui, sans-serif';
     ctx.fillStyle = '#ffd94d';
-    ctx.fillText(g.mobile ? 'PISTOL — SHOOT button' : 'PISTOL — K / click to shoot', 18, 104);
+    ctx.fillText(t(g.mobile ? 'hud.pistol.mobile' : 'hud.pistol.desktop'), 18, 104);
   }
   if (g.toast && g.toast.t > 0) {
     ctx.font = '800 20px system-ui, sans-serif';
@@ -440,7 +421,7 @@ export function drawHUD(g) {
     ctx.font = '700 12.5px system-ui, sans-serif';
     ctx.fillStyle = 'rgba(255,217,77,0.92)';
     ctx.textAlign = 'right';
-    ctx.fillText('LOSING THEM — stay out of sight…', w - 19, 80);
+    ctx.fillText(t('hud.losing'), w - 19, 80);
     ctx.textAlign = 'left';
   }
 
@@ -488,7 +469,7 @@ export function drawHUD(g) {
     ctx.font = '800 12px system-ui, sans-serif';
     ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'center';
-    ctx.fillText('BUSTED?', w / 2, by + 12);
+    ctx.fillText(t('hud.bustedMeter'), w / 2, by + 12);
     ctx.textAlign = 'left';
   }
 
@@ -528,7 +509,7 @@ export function drawHUD(g) {
   // Interaction prompt, bottom-center. On phones the "E — …" prompts live on
   // the USE button instead, so only other prompts (the spray garage) draw here,
   // lifted clear of the button cluster.
-  if (g.prompt && !(g.mobile && g.prompt.startsWith('E — '))) {
+  if (g.prompt && !(g.mobile && g.prompt.startsWith(PROMPT_PREFIX))) {
     ctx.font = `700 ${g.mobile ? 15.5 : 18}px system-ui, sans-serif`;
     const tw = ctx.measureText(g.prompt).width + 30;
     const py = g.mobile ? h - 178 : h - 52;
@@ -549,11 +530,11 @@ export function drawHUD(g) {
     ctx.textAlign = 'center';
     ctx.font = `900 ${g.mobile ? 42 : 54}px system-ui, sans-serif`;
     ctx.fillStyle = '#ffffff';
-    ctx.fillText('PAUSED', w / 2, h / 2 - 10);
+    ctx.fillText(t('pause.title'), w / 2, h / 2 - 10);
     ctx.font = `600 ${g.mobile ? 15 : 18}px system-ui, sans-serif`;
     ctx.fillStyle = '#c8d2e0';
     ctx.fillText(
-      g.mobile ? 'Tap RESUME to keep playing' : 'P to resume · E enter car · F punch · K shoot · M mute',
+      t(g.mobile ? 'pause.hint.mobile' : 'pause.hint.desktop'),
       w / 2, h / 2 + 26,
     );
     if (hasProgress(g.saveData)) {
@@ -561,13 +542,13 @@ export function drawHUD(g) {
       if (g.resetArm?.armed) {
         ctx.fillStyle = '#ff8a7a';
         ctx.fillText(
-          g.mobile ? 'Tap RESET PROGRESS again to CONFIRM — save will be wiped!' : 'Press R again to CONFIRM reset — your save will be wiped!',
+          t(g.mobile ? 'pause.resetArmed.mobile' : 'pause.resetArmed.desktop'),
           w / 2, h / 2 + 58,
         );
       } else {
         ctx.fillStyle = '#8b93a5';
         ctx.fillText(
-          g.mobile ? 'RESET PROGRESS (bottom-left) wipes your save' : 'R — reset progress',
+          t(g.mobile ? 'pause.resetHint.mobile' : 'pause.resetHint.desktop'),
           w / 2, h / 2 + 58,
         );
       }

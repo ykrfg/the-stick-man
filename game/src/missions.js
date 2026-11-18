@@ -7,18 +7,20 @@ import { HEAT_THRESHOLDS } from './config.js';
 import { makeMarker } from './world3d.js';
 import { removePed, spawnPed } from './people.js';
 import { addHeat } from './police.js';
+import { t } from './i18n.js';
 
-export const MISSION_TITLES = ['FIRST RUN', 'THE GETAWAY', 'COLLECTION DAY'];
-
-const INTRO_LINES = [
-  "Bruno: A package sits at the Pier Warehouse with my name on it. Bring it home.",
-  "Bruno: Shade's in trouble at Club Neon. Pick him up, lose the law, drop him at the warehouse.",
-  "Bruno: Three shops owe me protection money. Their new 'collectors' disagree. Persuade them.",
-];
+/** The three chained story missions, in order (titles/intros live in i18n.js). */
+const MISSION_COUNT = 3;
+export function missionTitle(index) {
+  return t(`mission.${index}.title`);
+}
+function missionIntro(index) {
+  return t(`mission.${index}.intro`);
+}
 
 export function missionsInit(g) {
   g.mission = {
-    index: Math.min(MISSION_TITLES.length, (g.saveData.missionsDone ?? []).length),
+    index: Math.min(MISSION_COUNT, (g.saveData.missionsDone ?? []).length),
     active: false,
     phase: '',
     shopStep: 0,
@@ -47,7 +49,7 @@ export function missionsInit(g) {
 }
 
 export function missionAvailable(g) {
-  return !g.mission.active && g.mission.index < MISSION_TITLES.length;
+  return !g.mission.active && g.mission.index < MISSION_COUNT;
 }
 
 function setMarker(g, marker, x, y) {
@@ -99,7 +101,7 @@ export function acceptMission(g) {
     m.phase = 'toShop';
     postCollectors(g);
   }
-  g.say(MISSION_TITLES[m.index], INTRO_LINES[m.index], 5.5);
+  g.say(missionTitle(m.index), missionIntro(m.index), 5.5);
   g.events.push({ type: 'missionstart' });
 }
 
@@ -113,7 +115,7 @@ export function acceptMission(g) {
 // ---------------------------------------------------------------------------
 
 export function jobAvailable(g) {
-  return !g.mission.active && !g.job.active && g.mission.index >= MISSION_TITLES.length;
+  return !g.mission.active && !g.job.active && g.mission.index >= MISSION_COUNT;
 }
 
 /** Named places a delivery can start and end at: landmarks plus the shops. */
@@ -161,7 +163,7 @@ export function acceptJob(g) {
     j.to = places[b];
     j.phase = 'toPickup';
     j.reward = 5 * g.rng.int(18, 28); // $90–140
-    g.say('ODD JOB — DELIVERY', `Bruno: Package waiting at ${j.from.name}. Take it to ${j.to.name}. $${j.reward} in it for you.`, 5.5);
+    g.say(t('job.delivery.title'), t('job.delivery.sub', { from: j.from.name, to: j.to.name, reward: `$${j.reward}` }), 5.5);
   } else {
     j.shopIndex = g.rng.int(0, g.city.shops.length - 1);
     const shop = g.city.shops[j.shopIndex];
@@ -170,7 +172,7 @@ export function acceptJob(g) {
     // Posted NOW, while the player is still at the diner: the approach
     // shows two men waiting at the shopfront, never a pop-in at the door.
     postJobCollectors(g);
-    g.say('ODD JOB — COLLECTION', `Bruno: ${shop.name} is late again, and its collectors disagree. Persuade them. $${j.reward}.`, 5.5);
+    g.say(t('job.collection.title'), t('job.collection.sub', { shop: shop.name, reward: `$${j.reward}` }), 5.5);
   }
   g.events.push({ type: 'missionstart' });
 }
@@ -185,7 +187,7 @@ function completeJob(g, line) {
   g.earned += j.reward;
   g.saveData.jobsDone = (g.saveData.jobsDone ?? 0) + 1;
   g.events.push({ type: 'save' });
-  g.say('JOB DONE', `${line}  +$${j.reward}`, 4.5);
+  g.say(t('say.jobDone.title'), `${line}  +$${j.reward}`, 4.5);
   g.events.push({ type: 'missiondone' });
 }
 
@@ -200,14 +202,14 @@ function updateJob(g) {
       g.markerRed.visible = false;
       if (near(j.from.x, j.from.y, 56)) {
         j.phase = 'toDropoff';
-        g.say('PACKAGE SECURED', `Now take it to ${j.to.name}.`, 3);
+        g.say(t('say.packageSecured.title'), t('say.packageSecured.job', { place: j.to.name }), 3);
         g.events.push({ type: 'pickup' });
       }
     } else if (j.phase === 'toDropoff') {
       setMarker(g, g.markerGold, j.to.x, j.to.y);
       g.markerRed.visible = false;
       if (near(j.to.x, j.to.y, 56)) {
-        completeJob(g, 'Special delivery. No questions asked.');
+        completeJob(g, t('say.jobDone.delivery'));
       }
     }
   } else if (j.type === 'collection') {
@@ -220,7 +222,7 @@ function updateJob(g) {
         // The trigger only wakes the men posted at accept time.
         j.phase = 'fight';
         for (const rival of j.rivals) if (rival.state === 'idle') rival.state = 'fight';
-        g.say('COLLECTORS', '"Bruno\'s tab is closed, stick."', 3);
+        g.say(t('say.collectors.title'), t('say.collectors.job'), 3);
       }
     } else if (j.phase === 'fight') {
       setMarker(g, g.markerRed, shop.x, shop.y);
@@ -228,7 +230,7 @@ function updateJob(g) {
       if (j.rivals.every((r) => r.state === 'down')) {
         for (const rival of j.rivals) removePed(g, rival);
         j.rivals = [];
-        completeJob(g, `${shop.name} paid up.`);
+        completeJob(g, t('say.jobDone.collection', { shop: shop.name }));
       }
     }
   }
@@ -246,29 +248,29 @@ export function objectiveText(g) {
     if (j && j.active) {
       if (j.type === 'delivery') {
         return j.phase === 'toPickup'
-          ? `Odd job: pick up the package at ${j.from.name}.`
-          : `Odd job: deliver the package to ${j.to.name}.`;
+          ? t('obj.jobPickup', { place: j.from.name })
+          : t('obj.jobDeliver', { place: j.to.name });
       }
       const shop = g.city.shops[j.shopIndex];
       const shopName = shop ? shop.name : 'the shop';
       return j.phase === 'fight'
-        ? `Odd job: beat the collectors at ${shopName}!`
-        : `Odd job: collect at ${shopName} — it owes Bruno.`;
+        ? t('obj.jobFight', { shop: shopName })
+        : t('obj.jobCollect', { shop: shopName });
     }
-    if (m.index >= MISSION_TITLES.length) return "Free roam — Palmera is yours. Bruno has odd jobs at Bruno's Diner.";
-    return "Talk to Bruno at Bruno's Diner (E) for work.";
+    if (m.index >= MISSION_COUNT) return t('obj.freeRoam');
+    return t('obj.talkBruno');
   }
   const shop = g.city.shops[m.shopStep];
   const shopName = shop ? shop.name : 'the shop';
   switch (m.phase) {
-    case 'toWarehouse': return 'Pick up the package at the Pier Warehouse.';
-    case 'returnDiner': return "Bring the package back to Bruno's Diner.";
-    case 'toClub': return 'Head to Club Neon and find Shade.';
-    case 'getCar': return 'Get a car and come back for Shade at Club Neon.';
-    case 'escape': return 'LOSE THE HEAT! Get the stars off your back.';
-    case 'dropoff': return 'Drop Shade at the Pier Warehouse.';
-    case 'toShop': return `Collect at ${shopName} — it owes Bruno. (${m.shopStep + 1}/3)`;
-    case 'fight': return `Beat the collectors at ${shopName}!`;
+    case 'toWarehouse': return t('obj.toWarehouse');
+    case 'returnDiner': return t('obj.returnDiner');
+    case 'toClub': return t('obj.toClub');
+    case 'getCar': return t('obj.getCar');
+    case 'escape': return t('obj.escape');
+    case 'dropoff': return t('obj.dropoff');
+    case 'toShop': return t('obj.toShop', { shop: shopName, step: m.shopStep + 1 });
+    case 'fight': return t('obj.fight', { shop: shopName });
     default: return '';
   }
 }
@@ -323,7 +325,7 @@ function completeMission(g, reward, line) {
   g.earned += reward;
   if (!g.saveData.missionsDone.includes(m.index)) g.saveData.missionsDone.push(m.index);
   g.events.push({ type: 'save' });
-  g.say('JOB DONE', `${line}  +$${reward}`, 4.5);
+  g.say(t('say.jobDone.title'), `${line}  +$${reward}`, 4.5);
   g.events.push({ type: 'missiondone' });
   m.index += 1;
 }
@@ -344,7 +346,7 @@ export function failMission(g) {
     }
     for (const rival of m.rivals) removePed(g, rival);
     m.rivals = [];
-    g.say('JOB FAILED', 'Bruno still has the job, if you want it.', 3.5);
+    g.say(t('say.jobFailed.title'), t('say.jobFailed.mission'), 3.5);
   }
   const j = g.job;
   if (j && j.active) {
@@ -353,7 +355,7 @@ export function failMission(g) {
     hideMarkers(g);
     for (const rival of j.rivals) removePed(g, rival);
     j.rivals = [];
-    g.say('JOB FAILED', 'Bruno still has work, if you want it.', 3.5);
+    g.say(t('say.jobFailed.title'), t('say.jobFailed.job'), 3.5);
   }
 }
 
@@ -364,7 +366,7 @@ export function onBoarded(g) {
   m.phase = 'escape';
   const need = HEAT_THRESHOLDS[2] + 5 - g.heat;
   if (need > 0) addHeat(g, need, g.player.x, g.player.y, { force: true });
-  g.say('SHADE IS IN!', 'Every cop in Palmera just heard. Lose the heat!', 4);
+  g.say(t('say.shadeIn.title'), t('say.shadeIn.sub'), 4);
 }
 
 /** Arrival checks, fight checks and marker placement, once per frame. */
@@ -399,13 +401,13 @@ export function updateMissions(g, dt, time) {
       g.markerRed.visible = false;
       if (near(L.pier.x, L.pier.y, 56)) {
         m.phase = 'returnDiner';
-        g.say('PACKAGE SECURED', 'Now get it back to Bruno.', 3);
+        g.say(t('say.packageSecured.title'), t('say.packageSecured.mission'), 3);
         g.events.push({ type: 'pickup' });
       }
     } else if (m.phase === 'returnDiner') {
       setMarker(g, g.markerGold, L.diner.x, L.diner.y);
       if (near(L.diner.x, L.diner.y, 56)) {
-        completeMission(g, 150, 'The package made it home.');
+        completeMission(g, 150, t('say.jobDone.mission0'));
       }
     }
   } else if (m.index === 1) {
@@ -416,7 +418,7 @@ export function updateMissions(g, dt, time) {
         // Shade has been waiting at the club door since the job was taken
         // (posted in acceptMission) — arriving just starts the next step.
         m.phase = 'getCar';
-        g.say('SHADE', 'Bruno\'s getaway driver, one step ahead of the law. "Get us a car. Any car."', 4.5);
+        g.say('SHADE', t('say.shade.sub'), 4.5);
       }
     } else if (m.phase === 'getCar') {
       // The marker (and with it the minimap blip) stands on Shade himself:
@@ -432,7 +434,7 @@ export function updateMissions(g, dt, time) {
       hideMarkers(g);
       if (g.stars === 0) {
         m.phase = 'dropoff';
-        g.say('CLEAN', 'Now drop Shade at the warehouse, quiet-like.', 3.5);
+        g.say(t('say.clean.title'), t('say.clean.sub'), 3.5);
       }
     } else if (m.phase === 'dropoff') {
       setMarker(g, g.markerGold, L.pier.x, L.pier.y);
@@ -447,7 +449,7 @@ export function updateMissions(g, dt, time) {
           g.player.hasPistol = true;
           g.events.push({ type: 'pistol' });
         }
-        completeMission(g, 300, 'Shade vanished into the warehouse.');
+        completeMission(g, 300, t('say.jobDone.mission1'));
       }
     }
   } else if (m.index === 2) {
@@ -461,7 +463,7 @@ export function updateMissions(g, dt, time) {
         // trigger only wakes the men the player already saw waiting.
         m.phase = 'fight';
         for (const rival of m.rivals) if (rival.state === 'idle') rival.state = 'fight';
-        g.say('COLLECTORS', '"This turf has new management, stick."', 3);
+        g.say(t('say.collectors.title'), t('say.collectors.mission'), 3);
       }
     } else if (m.phase === 'fight') {
       setMarker(g, g.markerRed, shop.x, shop.y);
@@ -474,11 +476,11 @@ export function updateMissions(g, dt, time) {
         g.events.push({ type: 'cash', amount: 120 });
         m.shopStep += 1;
         if (m.shopStep >= g.city.shops.length) {
-          completeMission(g, 250, 'Every shop remembers who protects them.');
+          completeMission(g, 250, t('say.jobDone.mission2'));
         } else {
           m.phase = 'toShop';
           postCollectors(g);
-          g.say('PAID UP', 'One shop down. Keep moving.', 2.6);
+          g.say(t('say.paidUp.title'), t('say.paidUp.sub'), 2.6);
         }
       }
     }

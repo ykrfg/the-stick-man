@@ -1,0 +1,380 @@
+// JP/EN language mode: every player-visible string in the game lives in
+// this table, keyed by id, and call sites render through t(). Place and
+// character names (Bruno's Diner, NOODLE BAR NUKI, Shade, Palmera…) are
+// proper nouns and stay as they are in both languages.
+//
+// The setting persists in localStorage under its OWN key — deliberately
+// NOT inside the game save, so wiping progress never resets the language.
+// Default: Japanese when the browser language starts with "ja", English
+// otherwise. Shot mode (?shot=) forces English: the official screenshots
+// are judged in an English-speaking context and must not change.
+
+export const LANG_KEY = 'the-stick-man-lang';
+
+/** Prompt lines open with this key-cap label in BOTH languages: the touch
+ *  USE button derives its label from the text after it, and the mobile
+ *  HUD suppresses on-screen prompts that start with it. */
+export const PROMPT_PREFIX = 'E — ';
+
+const STRINGS = {
+  en: {
+    // Title screens
+    'title.subtitle.desktop': 'A tiny toon crime spree in the city of Palmera',
+    'title.subtitle.mobile': 'A tiny toon crime spree in Palmera',
+    'title.pressEnter': 'Press ENTER to start',
+    'title.continueRun': 'CONTINUE — ${money} · {jobs} job(s) done — press ENTER',
+    'title.savedRun': 'Saved run — ${money} · {jobs} job(s) done',
+    'title.resetHint.desktop': 'R — reset progress',
+    'title.resetArmed.desktop': 'Press R again to CONFIRM reset — your save will be wiped!',
+    'title.resetHint.mobile': 'RESET PROGRESS (bottom-left) starts over',
+    'title.resetArmed.mobile': 'Tap RESET PROGRESS again to confirm!',
+    'title.footer.desktop': 'An original stick-figure game. Any resemblance to other cities is purely geographical.',
+    'title.footer.mobile': 'An original stick-figure game.',
+    'help.desktop.0': 'WASD / Arrows — move        Shift — sprint        Space — dash',
+    'help.desktop.1': 'E — enter / exit car, talk        F or J — punch',
+    'help.desktop.2': 'K or mouse click — shoot (once you have the pistol)',
+    'help.desktop.3': 'Right-drag mouse — camera        Wheel — zoom',
+    'help.desktop.4': 'Q (hold) — look back        P — pause        M — mute',
+    'help.desktop.5': "Heal: eat at Bruno's · treatment at St. Palm · repairs at Spray 'n Go",
+    'help.desktop.6': "Lose the cops: break line of sight — heat cools, stars fade. Spray 'n Go wipes it, for a price.",
+    'help.desktop.7': 'Free roam pays: odd jobs from Bruno — or hold up a shop (E).',
+    'help.desktop.8': 'Steal cars. Run jobs for Bruno. Mind the stars.',
+    'help.mobile.0': 'Left thumb — move · drive',
+    'help.mobile.1': 'Drag open screen — swing camera',
+    'help.mobile.2': 'Right buttons — USE · PUNCH · SHOOT',
+    'help.mobile.3': 'USE — steal cars, talk, take jobs',
+    'help.mobile.4': 'SPRINT — tap to toggle',
+    'help.mobile.5': 'DASH — burst of speed on foot',
+    'help.mobile.6': "Heal at Bruno's / St. Palm · repair at Spray 'n Go",
+    'help.mobile.7': 'Lose the cops — hide till the stars fade',
+    'help.mobile.8': 'Free roam pays — odd jobs · hold up shops',
+    // Pause
+    'pause.title': 'PAUSED',
+    'pause.hint.desktop': 'P to resume · E enter car · F punch · K shoot · M mute',
+    'pause.hint.mobile': 'Tap RESUME to keep playing',
+    'pause.resetHint.desktop': 'R — reset progress',
+    'pause.resetArmed.desktop': 'Press R again to CONFIRM reset — your save will be wiped!',
+    'pause.resetHint.mobile': 'RESET PROGRESS (bottom-left) wipes your save',
+    'pause.resetArmed.mobile': 'Tap RESET PROGRESS again to CONFIRM — save will be wiped!',
+    // Buttons
+    'btn.reset': 'RESET PROGRESS',
+    'btn.resetArmed': 'TAP AGAIN TO CONFIRM RESET',
+    'touch.tapStart': 'TAP TO START',
+    'touch.resume': 'RESUME',
+    'touch.tapContinue': 'TAP TO CONTINUE',
+    'touch.use': 'USE',
+    'touch.punch': 'PUNCH',
+    'touch.shoot': 'SHOOT',
+    'touch.sprint': 'SPRINT',
+    'touch.dash': 'DASH',
+    // HUD
+    'hud.car': 'CAR',
+    'hud.dash': 'DASH',
+    'hud.pistol.desktop': 'PISTOL — K / click to shoot',
+    'hud.pistol.mobile': 'PISTOL — SHOOT button',
+    'hud.losing': 'LOSING THEM — stay out of sight…',
+    'hud.bustedMeter': 'BUSTED?',
+    // Busted / wasted
+    'busted.title': 'BUSTED',
+    'busted.sub': 'The Palmera PD thanks you for your cooperation. Fine: ${fine}. Your wheels stay where you left them.',
+    'wasted.title': 'WASTED',
+    'wasted.sub': 'St. Palm Hospital patched you up. Bill: ${fine}. Bruno is waiting.',
+    'end.pressEnter': 'Press ENTER to keep going',
+    // Banners & status (main.js)
+    'banner.welcome.title': 'WELCOME TO PALMERA',
+    'banner.welcome.sub': 'Bruno at the diner has work for a stick like you.',
+    'status.welcome': 'Welcome to Palmera. Bruno at the diner has work.',
+    'banner.released': 'RELEASED',
+    'banner.discharged': 'DISCHARGED',
+    'banner.respawn.sub': 'Palmera keeps spinning. Bruno is at the diner.',
+    'banner.wrecked.title': 'WRECKED!',
+    'banner.wrecked.sub': 'Your ride is done. On your feet, stick.',
+    'banner.heatoff.title': 'THE HEAT IS OFF',
+    'banner.heatoff.sub': 'Palmera PD lost your trail. Stay clean, stick.',
+    'banner.pistol.title': 'PISTOL ACQUIRED',
+    'banner.pistol.sub': 'Shade left you his piece. K or click to shoot.',
+    'status.busted': 'Busted. Fine ${fine}. Press Enter to keep going.',
+    'status.wasted': 'Wasted. St. Palm Hospital patched you up. Press Enter to keep going.',
+    'status.resetArmed': 'Reset armed. Press again to confirm and wipe your progress.',
+    'toast.wanted': 'WANTED {stars}',
+    // Prompts & services (main.js)
+    'prompt.exitCar': 'E — Exit car',
+    'prompt.stealCar': 'E — Steal car',
+    'prompt.talk': 'E — Talk to Bruno',
+    'prompt.meal': "E — Eat at Bruno's ({price}) — restores health",
+    'prompt.treat': 'E — Get treated at St. Palm ({price}) — restores health',
+    'prompt.holdup': 'E — Hold up {shop}',
+    'prompt.recentlyHit': '{shop} — recently hit, the till is empty.',
+    'prompt.holdingUp': 'Holding up {shop}… {pct}% — stay put!',
+    'prompt.spray': "Spray 'n Go — {what} for {cost}. Hold still…",
+    'spray.what.paint': 'fresh paint',
+    'spray.what.repair': 'full repair',
+    'spray.what.both': 'paint + full repair',
+    'heal.meal.ok': 'A hot meal and a cold soda.',
+    'heal.treat.ok': 'Patched up and sent on your way.',
+    'heal.meal.broke': '"No cash, no stew, stick."',
+    'heal.treat.broke': 'No cash, no care — the desk nurse shakes her head.',
+    'heal.result': '{line} +{healed} HP for {cost}.',
+    'spray.title': "SPRAY 'N GO",
+    'spray.sub.both': 'New paint, full repair. Good as new — and the heat is gone.',
+    'spray.sub.repair': 'Full repair done. Good as new.',
+    'spray.sub.paint': 'New paint, new you. The heat is gone.',
+    'spray.sub.broke': 'Not enough cash for the service.',
+    'banner.holdup.title': 'HOLD-UP!',
+    'banner.holdup.sub': '"Hands where I can see them!" {shop} is being robbed.',
+    'banner.holdupOff.title': 'HOLD-UP OFF',
+    'banner.holdupOff.sub': 'You bailed. No payout, no hard feelings.',
+    'banner.heldup.title': 'HELD UP!',
+    'banner.heldup.sub': '{shop} emptied the till. +{payout} — now RUN.',
+    // Missions & jobs (missions.js)
+    'mission.0.title': 'FIRST RUN',
+    'mission.1.title': 'THE GETAWAY',
+    'mission.2.title': 'COLLECTION DAY',
+    'mission.0.intro': 'Bruno: A package sits at the Pier Warehouse with my name on it. Bring it home.',
+    'mission.1.intro': "Bruno: Shade's in trouble at Club Neon. Pick him up, lose the law, drop him at the warehouse.",
+    'mission.2.intro': "Bruno: Three shops owe me protection money. Their new 'collectors' disagree. Persuade them.",
+    'obj.talkBruno': "Talk to Bruno at Bruno's Diner (E) for work.",
+    'obj.freeRoam': "Free roam — Palmera is yours. Bruno has odd jobs at Bruno's Diner.",
+    'obj.toWarehouse': 'Pick up the package at the Pier Warehouse.',
+    'obj.returnDiner': "Bring the package back to Bruno's Diner.",
+    'obj.toClub': 'Head to Club Neon and find Shade.',
+    'obj.getCar': 'Get a car and come back for Shade at Club Neon.',
+    'obj.escape': 'LOSE THE HEAT! Get the stars off your back.',
+    'obj.dropoff': 'Drop Shade at the Pier Warehouse.',
+    'obj.toShop': 'Collect at {shop} — it owes Bruno. ({step}/3)',
+    'obj.fight': 'Beat the collectors at {shop}!',
+    'obj.jobPickup': 'Odd job: pick up the package at {place}.',
+    'obj.jobDeliver': 'Odd job: deliver the package to {place}.',
+    'obj.jobCollect': 'Odd job: collect at {shop} — it owes Bruno.',
+    'obj.jobFight': 'Odd job: beat the collectors at {shop}!',
+    'say.packageSecured.title': 'PACKAGE SECURED',
+    'say.packageSecured.mission': 'Now get it back to Bruno.',
+    'say.packageSecured.job': 'Now take it to {place}.',
+    'say.jobDone.title': 'JOB DONE',
+    'say.jobDone.mission0': 'The package made it home.',
+    'say.jobDone.mission1': 'Shade vanished into the warehouse.',
+    'say.jobDone.mission2': 'Every shop remembers who protects them.',
+    'say.jobDone.delivery': 'Special delivery. No questions asked.',
+    'say.jobDone.collection': '{shop} paid up.',
+    'say.jobFailed.title': 'JOB FAILED',
+    'say.jobFailed.mission': 'Bruno still has the job, if you want it.',
+    'say.jobFailed.job': 'Bruno still has work, if you want it.',
+    'say.collectors.title': 'COLLECTORS',
+    'say.collectors.mission': '"This turf has new management, stick."',
+    'say.collectors.job': '"Bruno\'s tab is closed, stick."',
+    'say.shade.sub': 'Bruno\'s getaway driver, one step ahead of the law. "Get us a car. Any car."',
+    'say.shadeIn.title': 'SHADE IS IN!',
+    'say.shadeIn.sub': 'Every cop in Palmera just heard. Lose the heat!',
+    'say.clean.title': 'CLEAN',
+    'say.clean.sub': 'Now drop Shade at the warehouse, quiet-like.',
+    'say.paidUp.title': 'PAID UP',
+    'say.paidUp.sub': 'One shop down. Keep moving.',
+    'job.delivery.title': 'ODD JOB — DELIVERY',
+    'job.delivery.sub': 'Bruno: Package waiting at {from}. Take it to {to}. {reward} in it for you.',
+    'job.collection.title': 'ODD JOB — COLLECTION',
+    'job.collection.sub': 'Bruno: {shop} is late again, and its collectors disagree. Persuade them. {reward}.',
+  },
+  ja: {
+    // Title screens
+    'title.subtitle.desktop': '舞台はパルメラ — 棒人間のトゥーン犯罪劇',
+    'title.subtitle.mobile': '舞台はパルメラ — 棒人間の犯罪騒動',
+    'title.pressEnter': 'ENTERキーでスタート',
+    'title.continueRun': 'つづきから — ${money} · 仕事{jobs}件クリア — ENTERキー',
+    'title.savedRun': 'セーブデータあり — ${money} · 仕事{jobs}件クリア',
+    'title.resetHint.desktop': 'Rキー — 進行度リセット',
+    'title.resetArmed.desktop': 'もう一度Rキーで確定 — セーブは消去されます！',
+    'title.resetHint.mobile': '左下の「進行度リセット」で最初から',
+    'title.resetArmed.mobile': '「進行度リセット」をもう一度タップで確定！',
+    'title.footer.desktop': 'オリジナルの棒人間ゲームです。他の街との類似は地理的な偶然です。',
+    'title.footer.mobile': 'オリジナルの棒人間ゲームです。',
+    'help.desktop.0': 'WASD / 矢印キー — 移動        Shift — スプリント        Space — ダッシュ',
+    'help.desktop.1': 'E — 乗車／降車、話す        F か J — パンチ',
+    'help.desktop.2': 'K かクリック — 発砲（ピストル入手後）',
+    'help.desktop.3': '右ドラッグ — カメラ        ホイール — ズーム',
+    'help.desktop.4': 'Q（長押し） — 後方確認        P — ポーズ        M — ミュート',
+    'help.desktop.5': "回復： Bruno'sで食事 · St. Palmで治療 · 修理は Spray 'n Go",
+    'help.desktop.6': "警察を撒く： 視界から消えれば熱が冷めて星が消える。Spray 'n Goなら金で即消し。",
+    'help.desktop.7': 'フリーロームで稼ぐ： ブルーノの小仕事 — それか店強盗（E）。',
+    'help.desktop.8': '車を盗め。仕事をこなせ。星に気をつけろ。',
+    'help.mobile.0': '左手の親指 — 移動 · 運転',
+    'help.mobile.1': '画面ドラッグ — カメラ回転',
+    'help.mobile.2': '右のボタン — つかう · なぐる · うつ',
+    'help.mobile.3': 'つかう — 車を盗む、話す、仕事を受ける',
+    'help.mobile.4': 'スプリント — タップで切替',
+    'help.mobile.5': 'ダッシュ — 徒歩で一瞬加速',
+    'help.mobile.6': "回復は Bruno's / St. Palm · 修理は Spray 'n Go",
+    'help.mobile.7': '警察を撒く — 星が消えるまで隠れろ',
+    'help.mobile.8': 'フリーロームでも稼げる — 小仕事 · 店強盗',
+    // Pause
+    'pause.title': 'ポーズ中',
+    'pause.hint.desktop': 'Pで再開 · E 乗車 · F パンチ · K 発砲 · M ミュート',
+    'pause.hint.mobile': '「再開」タップでゲームに戻る',
+    'pause.resetHint.desktop': 'Rキー — 進行度リセット',
+    'pause.resetArmed.desktop': 'もう一度Rキーで確定 — セーブは消去されます！',
+    'pause.resetHint.mobile': '左下の「進行度リセット」でセーブ消去',
+    'pause.resetArmed.mobile': '「進行度リセット」をもう一度タップで確定 — セーブは消去！',
+    // Buttons
+    'btn.reset': '進行度リセット',
+    'btn.resetArmed': 'もう一度押して確定',
+    'touch.tapStart': 'タップでスタート',
+    'touch.resume': '再開',
+    'touch.tapContinue': 'タップでつづける',
+    'touch.use': 'つかう',
+    'touch.punch': 'なぐる',
+    'touch.shoot': 'うつ',
+    'touch.sprint': 'スプリント',
+    'touch.dash': 'ダッシュ',
+    // HUD
+    'hud.car': '車',
+    'hud.dash': 'ダッシュ',
+    'hud.pistol.desktop': 'ピストル — K / クリックで発砲',
+    'hud.pistol.mobile': 'ピストル — 「うつ」ボタンで発砲',
+    'hud.losing': '撒きかけ — 姿を隠せ…',
+    'hud.bustedMeter': '逮捕寸前',
+    // Busted / wasted
+    'busted.title': '逮捕',
+    'busted.sub': 'パルメラ警察に感謝された。罰金 ${fine}。車は置いてきた場所にそのまま。',
+    'wasted.title': '病院送り',
+    'wasted.sub': 'St. Palm Hospitalで手当てを受けた。治療費 ${fine}。ブルーノが待っている。',
+    'end.pressEnter': 'ENTERキーでつづける',
+    // Banners & status (main.js)
+    'banner.welcome.title': 'パルメラへようこそ',
+    'banner.welcome.sub': 'ダイナーのブルーノが、あんたみたいな棒人間に仕事を持ってる。',
+    'status.welcome': 'パルメラへようこそ。ダイナーのブルーノに仕事がある。',
+    'banner.released': '釈放',
+    'banner.discharged': '退院',
+    'banner.respawn.sub': 'パルメラはいつも通り。ブルーノはダイナーにいる。',
+    'banner.wrecked.title': '大破！',
+    'banner.wrecked.sub': '愛車はもう動かない。歩くしかないな。',
+    'banner.heatoff.title': '撒いた！',
+    'banner.heatoff.sub': 'パルメラ警察はあんたを見失った。おとなしくしてろよ。',
+    'banner.pistol.title': 'ピストル入手',
+    'banner.pistol.sub': 'シェードが置いていった。Kかクリックで撃てる。',
+    'status.busted': '逮捕された。罰金 ${fine}。Enterキーでつづける。',
+    'status.wasted': 'やられた。St. Palm Hospitalで手当てを受けた。Enterキーでつづける。',
+    'status.resetArmed': 'リセット準備完了。もう一度押すと進行度が消去されます。',
+    'toast.wanted': '指名手配 {stars}',
+    // Prompts & services (main.js)
+    'prompt.exitCar': 'E — 車を降りる',
+    'prompt.stealCar': 'E — 車を盗む',
+    'prompt.talk': 'E — ブルーノと話す',
+    'prompt.meal': "E — Bruno'sで食事（{price}）— 体力回復",
+    'prompt.treat': 'E — St. Palmで治療（{price}）— 体力回復',
+    'prompt.holdup': 'E — {shop}を襲う',
+    'prompt.recentlyHit': '{shop} — 襲ったばかり。レジは空っぽ。',
+    'prompt.holdingUp': '{shop}を襲撃中… {pct}% — その場を動くな！',
+    'prompt.spray': "Spray 'n Go — {what}（{cost}）。じっとしていろ…",
+    'spray.what.paint': '新塗装',
+    'spray.what.repair': '全修理',
+    'spray.what.both': '塗装＋全修理',
+    'heal.meal.ok': '熱々の食事と冷たいソーダ。',
+    'heal.treat.ok': '手当て完了。もう行っていい。',
+    'heal.meal.broke': '「金がなきゃシチューは出ねえよ」',
+    'heal.treat.broke': '金がなければ治療なし — 受付の看護師が首を振る。',
+    'heal.result': '{line} 体力+{healed}（{cost}）。',
+    'spray.title': "SPRAY 'N GO",
+    'spray.sub.both': '新塗装＋全修理。新品同様 — 手配も消えた。',
+    'spray.sub.repair': '全修理完了。新品同様だ。',
+    'spray.sub.paint': '新しい塗装で別人のようだ。手配も消えた。',
+    'spray.sub.broke': '金が足りない。',
+    'banner.holdup.title': '強盗だ！',
+    'banner.holdup.sub': '「手を見えるところに！」{shop}を襲っている。',
+    'banner.holdupOff.title': '強盗中止',
+    'banner.holdupOff.sub': '逃げたな。金はなし、恨みもなし。',
+    'banner.heldup.title': '襲撃成功！',
+    'banner.heldup.sub': '{shop}のレジを空にした。+{payout} — 逃げろ！',
+    // Missions & jobs (missions.js)
+    'mission.0.title': '初仕事',
+    'mission.1.title': '逃走',
+    'mission.2.title': '取り立ての日',
+    'mission.0.intro': 'ブルーノ：Pier Warehouseに俺宛の荷物がある。持って帰ってこい。',
+    'mission.1.intro': 'ブルーノ：シェードがClub Neonで困ってる。迎えに行って、警察を撒いて、倉庫まで送れ。',
+    'mission.2.intro': 'ブルーノ：3軒の店が用心棒代を滞納してる。新しい「取り立て屋」が異議ありだそうだ。説得してこい。',
+    'obj.talkBruno': "Bruno's Dinerのブルーノに話しかけろ（E）— 仕事がある。",
+    'obj.freeRoam': "フリーローム — パルメラはあんたのもの。Bruno's Dinerのブルーノに小仕事がある。",
+    'obj.toWarehouse': 'Pier Warehouseで荷物を受け取れ。',
+    'obj.returnDiner': "荷物をBruno's Dinerへ持ち帰れ。",
+    'obj.toClub': 'Club Neonへ行ってシェードを探せ。',
+    'obj.getCar': '車を用意して、Club Neonのシェードを迎えに行け。',
+    'obj.escape': '警察を撒け！星を消せ。',
+    'obj.dropoff': 'シェードをPier Warehouseまで送れ。',
+    'obj.toShop': '{shop}で取り立て — ブルーノへの借りがある。（{step}/3）',
+    'obj.fight': '{shop}の取り立て屋を倒せ！',
+    'obj.jobPickup': '小仕事：{place}で荷物を受け取れ。',
+    'obj.jobDeliver': '小仕事：荷物を{place}へ届けろ。',
+    'obj.jobCollect': '小仕事：{shop}で取り立て — ブルーノへの借りがある。',
+    'obj.jobFight': '小仕事：{shop}の取り立て屋を倒せ！',
+    'say.packageSecured.title': '荷物確保',
+    'say.packageSecured.mission': 'ブルーノのところへ持ち帰れ。',
+    'say.packageSecured.job': '{place}へ届けろ。',
+    'say.jobDone.title': '仕事完了',
+    'say.jobDone.mission0': '荷物は無事届いた。',
+    'say.jobDone.mission1': 'シェードは倉庫の中へ消えた。',
+    'say.jobDone.mission2': 'どの店も、守ってくれるのが誰か思い知った。',
+    'say.jobDone.delivery': '特別配達。詮索なしだ。',
+    'say.jobDone.collection': '{shop}は払った。',
+    'say.jobFailed.title': '仕事失敗',
+    'say.jobFailed.mission': 'ブルーノはまだ仕事を持ってる。やる気があるならな。',
+    'say.jobFailed.job': 'ブルーノにはまだ仕事がある。やる気があるならな。',
+    'say.collectors.title': '取り立て屋',
+    'say.collectors.mission': '「この縄張りは新しい管理者になったんだ、棒人間」',
+    'say.collectors.job': '「ブルーノのツケは終わりだ、棒人間」',
+    'say.shade.sub': 'ブルーノの逃走ドライバー、警察の一歩先を行く。「車を用意しろ。何でもいい」',
+    'say.shadeIn.title': 'シェード乗車！',
+    'say.shadeIn.sub': 'パルメラ中の警官が聞きつけた。撒け！',
+    'say.clean.title': 'クリーン',
+    'say.clean.sub': '静かにシェードを倉庫まで送れ。',
+    'say.paidUp.title': '支払い済み',
+    'say.paidUp.sub': '1軒片付いた。次へ行け。',
+    'job.delivery.title': '小仕事 — 配達',
+    'job.delivery.sub': 'ブルーノ：{from}に荷物が待ってる。{to}へ届けろ。礼は{reward}だ。',
+    'job.collection.title': '小仕事 — 取り立て',
+    'job.collection.sub': 'ブルーノ：{shop}がまた滞納だ。取り立て屋は異議ありだそうだ。説得してこい。{reward}。',
+  },
+};
+
+let lang = 'en';
+let locked = false; // shot mode: forced EN, toggle hidden, nothing persists
+
+/** Choose the starting language. forceEn (shot mode) wins over everything. */
+export function initLang({ forceEn = false } = {}) {
+  if (forceEn) {
+    lang = 'en';
+    locked = true;
+    return lang;
+  }
+  try {
+    const saved = window.localStorage.getItem(LANG_KEY);
+    if (saved === 'ja' || saved === 'en') lang = saved;
+    else lang = (navigator.language || 'en').toLowerCase().startsWith('ja') ? 'ja' : 'en';
+  } catch {
+    lang = 'en';
+  }
+  return lang;
+}
+
+export function getLang() {
+  return lang;
+}
+
+export function isLangLocked() {
+  return locked;
+}
+
+/** Switch language and persist it (own key; the game save is untouched). */
+export function setLang(next) {
+  if (next !== 'ja' && next !== 'en') return;
+  lang = next;
+  if (!locked) {
+    try {
+      window.localStorage.setItem(LANG_KEY, next);
+    } catch { /* private mode etc. — the in-memory switch still applies */ }
+  }
+}
+
+/** Render a string by id, substituting {name}-style placeholders. */
+export function t(id, params = {}) {
+  const table = STRINGS[lang] ?? STRINGS.en;
+  const s = table[id] ?? STRINGS.en[id] ?? id;
+  return s.replace(/\{(\w+)\}/g, (m, k) => (params[k] !== undefined ? String(params[k]) : m));
+}

@@ -23,10 +23,17 @@ import {
 import { drawHUD } from './hud.js';
 import { setupShot, tickShot } from './shots.js';
 import { detectMobile, initTouch } from './touch.js';
+import { getLang, initLang, setLang, t } from './i18n.js';
 
 const params = new URLSearchParams(location.search);
 const shotName = params.get('shot');
 const statusEl = document.getElementById('status');
+
+// JP/EN language (src/i18n.js): default from the browser language, the
+// player's choice persists under its own localStorage key. Shot mode
+// forces English — the official screenshots are judged in an
+// English-speaking context and must not change with a saved language.
+initLang({ forceEn: !!shotName });
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -172,6 +179,37 @@ if (shotName) setupShot(g, shotName);
 // Null on desktop, where nothing about the input path changes.
 const touchUI = g.mobile && !shotName ? initTouch(g) : null;
 
+// --- JP/EN toggle (title & pause screens) ---
+// Two small DOM buttons overlaid top-center; the canvas title/pause text
+// redraws every frame from the string table, so a switch re-renders the
+// visible screen at once — only the DOM labels (reset button, touch
+// buttons) need an explicit re-label pass, which applyLang drives.
+g.lang = getLang();
+const langToggleEl = document.getElementById('langToggle');
+const langJaBtn = document.getElementById('langJa');
+const langEnBtn = document.getElementById('langEn');
+function applyLang() {
+  g.lang = getLang();
+  document.documentElement.lang = g.lang;
+  langJaBtn.classList.toggle('on', g.lang === 'ja');
+  langEnBtn.classList.toggle('on', g.lang === 'en');
+  lastResetBtnKey = ''; // force the reset button to re-label in the new language
+  syncResetBtn();
+  if (touchUI) touchUI.relabel();
+}
+langJaBtn.addEventListener('click', () => { setLang('ja'); applyLang(); });
+langEnBtn.addEventListener('click', () => { setLang('en'); applyLang(); });
+let lastLangKey = '';
+function syncLangToggle() {
+  const show = !shotName && (g.state === 'title' || g.state === 'paused');
+  const key = `${show}|${g.lang}`;
+  if (key === lastLangKey) return;
+  lastLangKey = key;
+  langToggleEl.style.display = show ? 'flex' : 'none';
+  langJaBtn.classList.toggle('on', g.lang === 'ja');
+  langEnBtn.classList.toggle('on', g.lang === 'en');
+}
+
 // A handle for the headless play-test and screenshot scripts (and curious players
 // in devtools): the whole game state, live.
 window.__sm = g;
@@ -210,7 +248,7 @@ function pokeReset() {
   if (!g.resetArm.armed) {
     g.resetArm.armed = true;
     g.resetArm.t = 4;
-    statusEl.textContent = 'Reset armed. Press again to confirm and wipe your progress.';
+    statusEl.textContent = t('status.resetArmed');
     return;
   }
   disarmReset();
@@ -229,11 +267,11 @@ resetBtn.addEventListener('touchstart', (event) => {
 let lastResetBtnKey = '';
 function syncResetBtn() {
   const show = (g.state === 'title' || g.state === 'paused') && hasProgress(g.saveData);
-  const key = `${show}|${g.resetArm.armed}`;
+  const key = `${show}|${g.resetArm.armed}|${g.lang}`;
   if (key === lastResetBtnKey) return;
   lastResetBtnKey = key;
   resetBtn.style.display = show ? 'block' : 'none';
-  resetBtn.textContent = g.resetArm.armed ? 'TAP AGAIN TO CONFIRM RESET' : 'RESET PROGRESS';
+  resetBtn.textContent = g.resetArm.armed ? t('btn.resetArmed') : t('btn.reset');
   resetBtn.classList.toggle('armed', g.resetArm.armed);
 }
 
@@ -345,7 +383,7 @@ function doBusted() {
   g.state = 'busted';
   g.sfx.hurt();
   persist();
-  statusEl.textContent = `Busted. Fine $${fine}. Press Enter to keep going.`;
+  statusEl.textContent = t('status.busted', { fine });
 }
 
 function doWasted() {
@@ -358,7 +396,7 @@ function doWasted() {
   g.state = 'wasted';
   g.sfx.hurt();
   persist();
-  statusEl.textContent = 'Wasted. St. Palm Hospital patched you up. Press Enter to keep going.';
+  statusEl.textContent = t('status.wasted');
 }
 
 /** After busted/wasted: back on the street with full health, heat gone. */
@@ -380,7 +418,7 @@ function respawn() {
   p.y = spot.y + 12;
   p.hp = PLAYER.maxHp;
   g.state = 'play';
-  g.say(wasBusted ? 'RELEASED' : 'DISCHARGED', 'Palmera keeps spinning. Bruno is at the diner.', 3);
+  g.say(wasBusted ? t('banner.released') : t('banner.discharged'), t('banner.respawn.sub'), 3);
 }
 
 /** Drain the event queue: crimes to heat, hits to sounds, story beats onward. */
@@ -433,7 +471,7 @@ function processEvents() {
             syncCarMesh(p.car, 0);
             exitCar();
             p.hp = Math.min(p.hp, 35);
-            g.say('WRECKED!', 'Your ride is done. On your feet, stick.', 3);
+            g.say(t('banner.wrecked.title'), t('banner.wrecked.sub'), 3);
           }
         } else {
           p.hp -= ev.ped.role === 'cop' ? 7 : 9;
@@ -444,10 +482,10 @@ function processEvents() {
       case 'busted': doBusted(); break;
       case 'starup':
         g.sfx.alarm();
-        g.toast = { text: `WANTED ${'★'.repeat(ev.stars)}`, t: 1.8 };
+        g.toast = { text: t('toast.wanted', { stars: '★'.repeat(ev.stars) }), t: 1.8 };
         break;
       case 'heatoff':
-        g.say('THE HEAT IS OFF', 'Palmera PD lost your trail. Stay clean, stick.', 3.2);
+        g.say(t('banner.heatoff.title'), t('banner.heatoff.sub'), 3.2);
         g.sfx.tone('sine', 520, 780, 0.14, 0.09);
         break;
       case 'boarded': onBoarded(g); g.sfx.pickup(); break;
@@ -455,7 +493,7 @@ function processEvents() {
       case 'missionstart': g.sfx.confirm(); break;
       case 'missiondone': g.sfx.confirm(); persist(); break;
       case 'pistol':
-        g.say('PISTOL ACQUIRED', "Shade left you his piece. K or click to shoot.", 4.2);
+        g.say(t('banner.pistol.title'), t('banner.pistol.sub'), 4.2);
         g.sfx.pickup();
         break;
       case 'save': persist(); break;
@@ -503,7 +541,7 @@ function finishRobbery(i) {
   g.events.push({ type: 'cash', amount: payout });
   // Seen by definition — the keeper is staring straight at you.
   addHeat(g, ROBBERY_HEAT, shop.x, shop.y, { force: true });
-  g.say('HELD UP!', `${shop.name} emptied the till. +$${payout} — now RUN.`, 3.4);
+  g.say(t('banner.heldup.title'), t('banner.heldup.sub', { shop: shop.name, payout: `$${payout}` }), 3.4);
   persist();
 }
 
@@ -522,11 +560,11 @@ function updateInteractions(dt) {
       const shop = g.city.shops[r.shop];
       if (!shop || Math.hypot(p.x - shop.x, p.y - shop.y) > 84) {
         g.robbery = null;
-        g.say('HOLD-UP OFF', 'You bailed. No payout, no hard feelings.', 2.4);
+        g.say(t('banner.holdupOff.title'), t('banner.holdupOff.sub'), 2.4);
       } else {
         r.t += dt;
         const pct = Math.min(100, Math.floor((r.t / ROBBERY_TIME) * 100));
-        g.prompt = `Holding up ${shop.name}… ${pct}% — stay put!`;
+        g.prompt = t('prompt.holdingUp', { shop: shop.name, pct });
         if (r.t >= ROBBERY_TIME) {
           g.robbery = null;
           finishRobbery(r.shop);
@@ -538,22 +576,22 @@ function updateInteractions(dt) {
       // A hurt player at the counter eats first: Bruno's work (story or
       // odd job) is one step to his side, and the meal would otherwise
       // be unreachable in free roam, where a job is always on offer.
-      g.prompt = `E — Eat at Bruno's ($${MEAL_PRICE}) — restores health`;
+      g.prompt = t('prompt.meal', { price: `$${MEAL_PRICE}` });
     } else if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
-      g.prompt = `E — Get treated at St. Palm ($${TREAT_PRICE}) — restores health`;
+      g.prompt = t('prompt.treat', { price: `$${TREAT_PRICE}` });
     } else if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
-      g.prompt = 'E — Talk to Bruno';
+      g.prompt = t('prompt.talk');
     } else if (shopDoorIndex(p) >= 0) {
       const si = shopDoorIndex(p);
       if (shopBusy(si)) {
         // The mission owns this door: no robbery prompt, no note.
       } else if (robCooldownLeft(si) > 0) {
-        g.prompt = `${g.city.shops[si].name} — recently hit, the till is empty.`;
+        g.prompt = t('prompt.recentlyHit', { shop: g.city.shops[si].name });
       } else {
-        g.prompt = `E — Hold up ${g.city.shops[si].name}`;
+        g.prompt = t('prompt.holdup', { shop: g.city.shops[si].name });
       }
     } else if (nearestEnterableCar()) {
-      g.prompt = 'E — Steal car';
+      g.prompt = t('prompt.stealCar');
     }
     return;
   }
@@ -568,8 +606,8 @@ function updateInteractions(dt) {
   if (inZone && p.car && Math.abs(p.car.speed) < 25 && (g.heat > 0 || damaged)) {
     const repairFee = damaged ? Math.max(15, Math.round((100 - p.car.hp) * 0.5)) : 0;
     const cost = (g.heat > 0 ? Math.max(40, g.stars * SPRAY_PER_STAR) : 0) + repairFee;
-    const what = g.heat > 0 && damaged ? 'paint + full repair' : damaged ? 'full repair' : 'fresh paint';
-    g.prompt = `Spray 'n Go — ${what} for $${cost}. Hold still…`;
+    const what = g.heat > 0 && damaged ? t('spray.what.both') : damaged ? t('spray.what.repair') : t('spray.what.paint');
+    g.prompt = t('prompt.spray', { what, cost: `$${cost}` });
     g.garageT += dt;
     if (g.garageT > 1.1) {
       g.garageT = -2.5;
@@ -579,20 +617,20 @@ function updateInteractions(dt) {
         g.heat = 0;
         g.stars = 0;
         p.car.hp = 100;
-        g.say("SPRAY 'N GO", hadHeat && damaged
-          ? 'New paint, full repair. Good as new — and the heat is gone.'
+        g.say(t('spray.title'), hadHeat && damaged
+          ? t('spray.sub.both')
           : damaged
-            ? 'Full repair done. Good as new.'
-            : 'New paint, new you. The heat is gone.', 3);
+            ? t('spray.sub.repair')
+            : t('spray.sub.paint'), 3);
         g.sfx.cash();
         persist();
       } else {
-        g.say("SPRAY 'N GO", 'Not enough cash for the service.', 2.4);
+        g.say(t('spray.title'), t('spray.sub.broke'), 2.4);
       }
     }
   } else {
     g.garageT = Math.max(0, g.garageT - dt * 2);
-    if (p.car && Math.abs(p.car.speed) < 45) g.prompt = 'E — Exit car';
+    if (p.car && Math.abs(p.car.speed) < 45) g.prompt = t('prompt.exitCar');
   }
 }
 
@@ -616,7 +654,7 @@ function healAt(name, fullPrice, okLine, brokeLine) {
   const cost = Math.ceil(fullPrice * frac);
   g.money -= cost;
   p.hp = Math.min(PLAYER.maxHp, p.hp + healed);
-  g.say(name, `${okLine} +${healed} HP for $${cost}.`, 2.8);
+  g.say(name, t('heal.result', { line: okLine, healed, cost: `$${cost}` }), 2.8);
   g.sfx.cash();
   persist();
 }
@@ -629,11 +667,11 @@ function handleInteract() {
     if (g.robbery) return; // E does nothing while a hold-up is being stood through
     const L = g.city.landmarks;
     if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
-      healAt("BRUNO'S", MEAL_PRICE, 'A hot meal and a cold soda.', '"No cash, no stew, stick."');
+      healAt("BRUNO'S", MEAL_PRICE, t('heal.meal.ok'), t('heal.meal.broke'));
       return;
     }
     if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
-      healAt('ST. PALM', TREAT_PRICE, 'Patched up and sent on your way.', 'No cash, no care — the desk nurse shakes her head.');
+      healAt('ST. PALM', TREAT_PRICE, t('heal.treat.ok'), t('heal.treat.broke'));
       return;
     }
     if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
@@ -647,7 +685,7 @@ function handleInteract() {
     const si = shopDoorIndex(p);
     if (si >= 0 && !shopBusy(si) && robCooldownLeft(si) <= 0) {
       g.robbery = { shop: si, t: 0 };
-      g.say('HOLD-UP!', `"Hands where I can see them!" ${g.city.shops[si].name} is being robbed.`, 2.2);
+      g.say(t('banner.holdup.title'), t('banner.holdup.sub', { shop: g.city.shops[si].name }), 2.2);
       return;
     }
     const car = nearestEnterableCar();
@@ -973,8 +1011,8 @@ function frame(now) {
     if (input.tapped('Enter')) {
       g.sfx.unlock();
       g.state = 'play';
-      g.say('WELCOME TO PALMERA', 'Bruno at the diner has work for a stick like you.', 4.2);
-      statusEl.textContent = 'Welcome to Palmera. Bruno at the diner has work.';
+      g.say(t('banner.welcome.title'), t('banner.welcome.sub'), 4.2);
+      statusEl.textContent = t('status.welcome');
     }
   } else if (g.state === 'busted' || g.state === 'wasted') {
     if (input.tapped('Enter')) respawn();
@@ -1050,6 +1088,7 @@ function frame(now) {
   updateAudioState();
   updateCamera(dt);
   syncResetBtn();
+  syncLangToggle();
   if (touchUI) touchUI.update();
   drawHUD(g);
   renderer.render(scene, camera);

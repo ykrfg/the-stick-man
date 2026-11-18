@@ -55,6 +55,15 @@
     background: rgba(24,12,14,0.72); color: #ff9a86; font: 700 13px system-ui, sans-serif;
     white-space: nowrap; cursor: pointer; touch-action: none; -webkit-user-select: none; user-select: none; }
   #btnReset.armed { background: #c93a2c; border-color: #17181c; color: #ffffff; }
+  /* JP/EN language toggle: title and pause screens only (main.js owns its
+     visibility). Top-center, clear of the wanted stars (top-right) and the
+     money readout (top-left) on both platforms. */
+  #langToggle { position: fixed; top: calc(10px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+    z-index: 9; display: none; gap: 0; border-radius: 999px; overflow: hidden;
+    border: 2px solid rgba(255,255,255,0.55); background: rgba(10,14,24,0.55); }
+  #langToggle button { padding: 7px 16px; border: 0; background: transparent; color: #c8d2e0;
+    font: 700 13px system-ui, sans-serif; cursor: pointer; touch-action: none; -webkit-user-select: none; user-select: none; }
+  #langToggle button.on { background: #ffd94d; color: #17181c; }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.min.js" } }
@@ -77,6 +86,10 @@
   <button id="tapBtn" type="button">TAP TO START</button>
 </div>
 <button id="btnReset" type="button">RESET PROGRESS</button>
+<div id="langToggle" role="group" aria-label="Language / 言語">
+  <button id="langJa" type="button">JP</button>
+  <button id="langEn" type="button">EN</button>
+</div>
 <p id="status" role="status" aria-live="polite"></p>
 <script type="module" src="./src/main.js"></script>
 </body>
