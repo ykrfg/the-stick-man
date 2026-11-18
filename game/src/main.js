@@ -614,6 +614,22 @@ function updateInteractions(dt) {
       }
     } else if (nearestEnterableCar()) {
       g.prompt = t('prompt.stealCar');
+    } else {
+      // The one car that will never open its door: the courier, driver
+      // at the wheel, doors locked. It used to refuse in silence — the
+      // player bumped into a solid car, got no prompt, and read it as
+      // a bug. A deliberate refusal has to SAY why: during COURIER HIT
+      // the line points at the job; afterwards (a stopped courier
+      // stays in the world) it just names the driver. No "E —" prefix:
+      // there is no action here, and the prefix would put it on the
+      // touch USE button as if there were.
+      const courier = g.cars.find((c) => c.kind === 'courier'
+        && Math.hypot(c.x - p.x, c.y - p.y) < 64);
+      if (courier) {
+        g.prompt = g.mission.active && g.mission.index === 4
+          ? t('prompt.courierMission')
+          : t('prompt.courierDriver');
+      }
     }
     return;
   }
