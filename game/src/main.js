@@ -18,7 +18,7 @@ import { runOverPed, seatDriverFigure, spawnPeds, syncFigure, updatePeds, update
 import { spawnCashPickup, updateBullets, updateCombat, updatePickups } from './combat.js';
 import { addHeat, updatePolice } from './police.js';
 import {
-  acceptJob, acceptMission, failMission, jobAvailable, missionAvailable, missionsInit, onBoarded, updateMissions,
+  acceptJob, acceptMission, failMission, jobAvailable, missionAvailable, missionInteract, missionPrompt, missionsInit, onBoarded, updateMissions,
 } from './missions.js';
 import { drawHUD } from './hud.js';
 import { setupShot, tickShot } from './shots.js';
@@ -303,6 +303,10 @@ function nearestEnterableCar() {
   let bestD = 56;
   for (const car of g.cars) {
     if (car.occupant === 'player' || car.wrecked) continue;
+    // The courier car is never enterable: its driver is at the wheel
+    // with the doors locked — stopping it is the COURIER HIT job, and
+    // climbing in would strand the mission's case in a "stolen" car.
+    if (car.kind === 'courier') continue;
     const d = Math.hypot(car.x - p.x, car.y - p.y);
     if (d < bestD) {
       bestD = d;
@@ -595,6 +599,10 @@ function updateInteractions(dt) {
       g.prompt = t('prompt.treat', { price: `$${TREAT_PRICE}` });
     } else if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
       g.prompt = t('prompt.talk');
+    } else if (missionPrompt(g)) {
+      // A mission grab spot (the courier's case, the raid's crate) owns
+      // its prompt, ahead of the shop doors below.
+      g.prompt = missionPrompt(g);
     } else if (shopDoorIndex(p) >= 0) {
       const si = shopDoorIndex(p);
       if (shopBusy(si)) {
@@ -696,6 +704,7 @@ function handleInteract() {
       else acceptJob(g);
       return;
     }
+    if (missionInteract(g)) return; // a mission grab spot takes the press
     const si = shopDoorIndex(p);
     if (si >= 0 && !shopBusy(si) && robCooldownLeft(si) <= 0) {
       g.robbery = { shop: si, t: 0 };

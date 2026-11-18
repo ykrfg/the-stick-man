@@ -1,16 +1,20 @@
-// The story: three jobs for Bruno, the black stick figure who runs Bruno's Diner
+// The story: six jobs for Bruno, the black stick figure who runs Bruno's Diner
 // and half the errands in Palmera. Walk up to Bruno and press E to take the next
 // job. Each mission drives a gold marker (red while someone has to be beaten),
-// pays cash, and unlocks the next; the pistol arrives with the second job. Failing
+// pays cash, and unlocks the next; the pistol arrives with the second job. The
+// back three jobs mix the tools together — fists and a marked car (REPO JOB),
+// a moving courier car stopped by crash damage and its crew (COURIER HIT), and
+// a timed drive into a two-wave warehouse fight (WAREHOUSE RAID). Failing
 // (busted or wasted) sends the player back to Bruno to try again.
-import { HEAT_THRESHOLDS } from './config.js';
+import { HEAT_THRESHOLDS, RAID_TIME_BONUS, RAID_TIMER } from './config.js';
 import { makeMarker } from './world3d.js';
 import { removePed, spawnPed } from './people.js';
+import { driveCourier, removeCar, spawnCar, spawnCourierCar, syncCarMesh } from './vehicles.js';
 import { addHeat } from './police.js';
 import { t } from './i18n.js';
 
-/** The three chained story missions, in order (titles/intros live in i18n.js). */
-const MISSION_COUNT = 3;
+/** The six chained story missions, in order (titles/intros live in i18n.js). */
+const MISSION_COUNT = 6;
 export function missionTitle(index) {
   return t(`mission.${index}.title`);
 }
@@ -26,6 +30,15 @@ export function missionsInit(g) {
     shopStep: 0,
     rivals: [],
     shade: null,
+    // Missions 4–6 state: the REPO JOB's marked car and its guards, the
+    // COURIER HIT car, and the WAREHOUSE RAID's second wave (posted at
+    // accept time, swapped into `rivals` when the door guards fall) and
+    // its opening-drive clock.
+    targetCar: null,
+    courier: null,
+    yardMen: [],
+    timer: 0,
+    timeBonus: false,
   };
   // Bruno's odd jobs: the free-roam work loop, unlocked once the story is
   // done. Same shape as a mission (marker, phases, JOB DONE payoff) but
@@ -80,6 +93,59 @@ function postCollectors(g) {
   for (const rival of m.rivals) rival.state = 'idle';
 }
 
+/**
+ * REPO JOB set-up, at accept time: the debtor's gold car parked on the
+ * avenue curb behind the Ammo Hut, and his two guards posted beside it.
+ * Everything exists from the moment Bruno hands the job out — the
+ * approach shows a guarded car, never a pop-in. The car is extra tough
+ * (and quietly repaired by the update loop while it is still the
+ * objective) so an early shunt can never soft-lock the job.
+ */
+function postRepoJob(g) {
+  const m = g.mission;
+  let y = 2300;
+  for (let tries = 0; tries < 4; tries += 1) {
+    if (!g.cars.some((c) => Math.hypot(c.x - 761, c.y - y) < 70)) break;
+    y += 110;
+  }
+  const car = spawnCar(g, 'parked', 761, y, Math.PI / 2, 0xffd166);
+  car.hp = 260;
+  m.targetCar = car;
+  m.rivals = [
+    spawnPed(g, { role: 'rival', x: 726, y: y - 30 }),
+    spawnPed(g, { role: 'rival', x: 726, y: y + 32 }),
+  ];
+  for (const rival of m.rivals) rival.state = 'idle';
+}
+
+/**
+ * WAREHOUSE RAID set-up, at accept time: two door guards at the
+ * warehouse's south face and the three-man yard crew behind them, all
+ * posted while the player is still at the diner. The yard crew waits in
+ * `yardMen` (idle) until the door fight ends; only then do they become
+ * the mission's `rivals` and wake.
+ */
+function postRaid(g) {
+  const m = g.mission;
+  const L = g.city.landmarks;
+  m.rivals = [
+    spawnPed(g, { role: 'rival', x: L.pier.x - 40, y: L.pier.y - 28 }),
+    spawnPed(g, { role: 'rival', x: L.pier.x + 42, y: L.pier.y - 28 }),
+  ];
+  m.yardMen = [
+    spawnPed(g, { role: 'rival', x: L.pier.x - 92, y: L.pier.y + 22, hp: 150, chase: 208, punchRate: 0.7 }),
+    spawnPed(g, { role: 'rival', x: L.pier.x, y: L.pier.y + 38, hp: 150, chase: 208, punchRate: 0.7 }),
+    spawnPed(g, { role: 'rival', x: L.pier.x + 92, y: L.pier.y + 22, hp: 150, chase: 208, punchRate: 0.7 }),
+  ];
+  for (const ped of [...m.rivals, ...m.yardMen]) ped.state = 'idle';
+}
+
+/** The cash crate's spot for the raid: just south of the warehouse doors. */
+function crateSpot(g) {
+  const L = g.city.landmarks;
+  return { x: L.pier.x, y: L.pier.y - 35 };
+}
+
 /** Start the current mission (the player talked to Bruno). */
 export function acceptMission(g) {
   const m = g.mission;
@@ -97,9 +163,21 @@ export function acceptMission(g) {
     m.shade = spawnPed(g, { role: 'shade', x: L.club.x + 24, y: L.club.y + 10, name: 'SHADE' });
     m.shade.fig.setExpression('angry');
     m.shade.state = 'idle';
-  } else {
+  } else if (m.index === 2) {
     m.phase = 'toShop';
     postCollectors(g);
+  } else if (m.index === 3) {
+    m.phase = 'toCar';
+    postRepoJob(g);
+  } else if (m.index === 4) {
+    m.phase = 'intercept';
+    // The courier is already looping the city when Bruno names it.
+    m.courier = spawnCourierCar(g);
+  } else {
+    m.phase = 'raidDrive';
+    m.timer = RAID_TIMER;
+    m.timeBonus = true;
+    postRaid(g);
   }
   g.say(missionTitle(m.index), missionIntro(m.index), 5.5);
   g.events.push({ type: 'missionstart' });
@@ -271,6 +349,22 @@ export function objectiveText(g) {
     case 'dropoff': return t('obj.dropoff');
     case 'toShop': return t('obj.toShop', { shop: shopName, step: m.shopStep + 1 });
     case 'fight': return t('obj.fight', { shop: shopName });
+    case 'toCar': return t('obj.repoGo');
+    case 'repoFight': return t('obj.repoFight');
+    case 'repoSteal': return t('obj.repoSteal');
+    case 'repoDeliver': return t('obj.repoDeliver');
+    case 'intercept': return t('obj.courierIntercept');
+    case 'escortsFight': return t('obj.courierEscorts');
+    case 'grabCase': return t('obj.courierCase');
+    case 'returnBruno': return t('obj.returnBruno');
+    case 'raidDrive': return t('obj.raidDrive', { secs: Math.max(0, Math.ceil(m.timer)) });
+    case 'raidDoor': return t('obj.raidDoor');
+    case 'raidFightDoor': return t('obj.raidDoorFight');
+    case 'raidFightYard': return t('obj.raidYardFight');
+    case 'grabCrate': return t('obj.raidCrate');
+    case 'raidEscapeCar': return t('obj.raidEscapeCar');
+    case 'loseLaw':
+    case 'escapeHeat': return t('obj.escape');
     default: return '';
   }
 }
@@ -312,6 +406,24 @@ export function objectiveTarget(g) {
       const shop = g.city.shops[m.shopStep];
       return shop ? { x: shop.x, y: shop.y } : null;
     }
+    case 'toCar':
+    case 'repoFight':
+    case 'repoSteal':
+      return m.targetCar ? { x: m.targetCar.x, y: m.targetCar.y } : { x: L.ammo.x, y: L.ammo.y };
+    case 'repoDeliver': return { x: L.pier.x, y: L.pier.y };
+    case 'intercept':
+    case 'escortsFight':
+    case 'grabCase':
+      return m.courier ? { x: m.courier.x, y: m.courier.y } : null;
+    case 'returnBruno': return { x: L.diner.x, y: L.diner.y };
+    case 'raidDrive':
+    case 'raidDoor':
+    case 'raidFightDoor':
+    case 'raidFightYard':
+      return { x: L.pier.x, y: L.pier.y };
+    case 'grabCrate': return crateSpot(g);
+    // raidEscapeCar (any car will do) and loseLaw / escapeHeat (the
+    // target is the heat itself) have no place to point at.
     default: return null;
   }
 }
@@ -346,6 +458,21 @@ export function failMission(g) {
     }
     for (const rival of m.rivals) removePed(g, rival);
     m.rivals = [];
+    // Missions 4–6 leave set pieces behind: the raid's second wave, the
+    // courier car, and the repo target car (only while it is still the
+    // debtor's — once the player has taken it, it is just their car).
+    for (const ped of m.yardMen) removePed(g, ped);
+    m.yardMen = [];
+    if (m.courier) {
+      removeCar(g, m.courier);
+      m.courier = null;
+    }
+    if (m.targetCar) {
+      if (!m.targetCar.touched) removeCar(g, m.targetCar);
+      m.targetCar = null;
+    }
+    m.timer = 0;
+    m.timeBonus = false;
     g.say(t('say.jobFailed.title'), t('say.jobFailed.mission'), 3.5);
   }
   const j = g.job;
@@ -367,6 +494,57 @@ export function onBoarded(g) {
   const need = HEAT_THRESHOLDS[2] + 5 - g.heat;
   if (need > 0) addHeat(g, need, g.player.x, g.player.y, { force: true });
   g.say(t('say.shadeIn.title'), t('say.shadeIn.sub'), 4);
+}
+
+/** Raise the heat to a scripted star count (the law "notices" the job). */
+function scriptedHeat(g, stars) {
+  const need = HEAT_THRESHOLDS[stars - 1] + 5 - g.heat;
+  if (need > 0) addHeat(g, need, g.player.x, g.player.y, { force: true });
+}
+
+// ---------------------------------------------------------------------------
+// The grab steps (the courier's case, the raid's cash crate): a place the
+// player walks up to and takes with E. main.js asks missionPrompt() what
+// to show and missionInteract() to run the take, in the same prompt /
+// interact priority as Bruno's counter — the mission owns these spots.
+// ---------------------------------------------------------------------------
+
+function grabSpot(g) {
+  const m = g.mission;
+  if (!m.active) return null;
+  if (m.index === 4 && m.phase === 'grabCase' && m.courier) {
+    return { x: m.courier.x, y: m.courier.y, key: 'prompt.grabCase' };
+  }
+  if (m.index === 5 && m.phase === 'grabCrate') {
+    const spot = crateSpot(g);
+    return { x: spot.x, y: spot.y, key: 'prompt.grabCrate' };
+  }
+  return null;
+}
+
+/** The E prompt for the current grab step, or '' when there is none here. */
+export function missionPrompt(g) {
+  const spot = grabSpot(g);
+  if (!spot || g.player.state !== 'foot') return '';
+  return Math.hypot(g.player.x - spot.x, g.player.y - spot.y) < 54 ? t(spot.key) : '';
+}
+
+/** Run the grab (E pressed at the spot). Returns true when it consumed the press. */
+export function missionInteract(g) {
+  if (!missionPrompt(g)) return false;
+  const m = g.mission;
+  if (m.index === 4 && m.phase === 'grabCase') {
+    m.phase = 'escapeHeat';
+    scriptedHeat(g, 3);
+    g.say(t('say.caseSecured.title'), t('say.caseSecured.sub'), 4);
+    g.events.push({ type: 'pickup' });
+  } else if (m.index === 5 && m.phase === 'grabCrate') {
+    m.phase = 'raidEscapeCar';
+    scriptedHeat(g, 3);
+    g.say(t('say.crateSecured.title'), t('say.crateSecured.sub'), 4);
+    g.events.push({ type: 'pickup' });
+  }
+  return true;
 }
 
 /** Arrival checks, fight checks and marker placement, once per frame. */
@@ -484,6 +662,171 @@ export function updateMissions(g, dt, time) {
         }
       }
     }
+  } else if (m.index === 3) {
+    // REPO JOB: fists at the curb, then the marked car to the warehouse.
+    const car = m.targetCar;
+    if (m.phase === 'toCar') {
+      if (car) setMarker(g, g.markerGold, car.x, car.y);
+      g.markerRed.visible = false;
+      if (car && near(car.x, car.y, 60) && p.state === 'foot') {
+        m.phase = 'repoFight';
+        for (const rival of m.rivals) if (rival.state === 'idle') rival.state = 'fight';
+        g.say(t('say.repoGuards.title'), t('say.repoGuards.sub'), 3);
+      }
+    } else if (m.phase === 'repoFight') {
+      if (car) setMarker(g, g.markerRed, car.x, car.y);
+      g.markerGold.visible = false;
+      if (m.rivals.every((r) => r.state === 'down')) {
+        for (const rival of m.rivals) removePed(g, rival);
+        m.rivals = [];
+        m.phase = 'repoSteal';
+        g.say(t('say.repoClear.title'), t('say.repoClear.sub'), 3);
+      }
+    } else if (m.phase === 'repoSteal') {
+      if (car) {
+        setMarker(g, g.markerGold, car.x, car.y);
+        // The objective car must survive until it is taken: if anything
+        // wrecks it first, the job would soft-lock on an unenterable
+        // wreck, so it quietly comes back whole.
+        if (car.wrecked) {
+          car.wrecked = false;
+          car.hp = 200;
+          syncCarMesh(car, 0);
+        }
+      }
+      g.markerRed.visible = false;
+      if (car && p.state === 'car' && p.car === car) {
+        m.phase = 'repoDeliver';
+        // The whole PD hears about this particular car the moment it rolls.
+        scriptedHeat(g, 2);
+        g.say(t('say.repoHot.title'), t('say.repoHot.sub'), 4);
+      }
+    } else if (m.phase === 'repoDeliver') {
+      setMarker(g, g.markerGold, L.pier.x, L.pier.y);
+      g.markerRed.visible = false;
+      if (car && p.state === 'car' && p.car === car && near(L.pier.x, L.pier.y, 62)) {
+        m.targetCar = null; // delivered: from here it is just a car in the world
+        completeMission(g, 220, t('say.jobDone.mission3'));
+      }
+    }
+  } else if (m.index === 4) {
+    // COURIER HIT: stop the moving car, beat its crew, take the case.
+    const car = m.courier;
+    if (m.phase === 'intercept') {
+      if (car) {
+        driveCourier(g, car, dt);
+        setMarker(g, g.markerGold, car.x, car.y);
+      }
+      g.markerRed.visible = false;
+      const pinned = car && (car.stillT ?? 0) > 2.2 && near(car.x, car.y, 320);
+      if (car && (car.wrecked || pinned)) {
+        // The crew bails out swinging: two of Bruno-grade troublemakers
+        // with more health and faster feet than the shop collectors.
+        // (NPCs have no guns in Palmera — the combat system only arms
+        // the player — so the escorts fight as elite fist fighters.)
+        car.speed = 0;
+        m.rivals = [
+          spawnPed(g, { role: 'rival', x: car.x + 32, y: car.y + 20, hp: 150, chase: 208, punchRate: 0.7 }),
+          spawnPed(g, { role: 'rival', x: car.x - 32, y: car.y - 20, hp: 150, chase: 208, punchRate: 0.7 }),
+        ];
+        for (const rival of m.rivals) rival.state = 'fight';
+        m.phase = 'escortsFight';
+        g.say(t('say.escorts.title'), t('say.escorts.sub'), 3.5);
+      }
+    } else if (m.phase === 'escortsFight') {
+      if (car) setMarker(g, g.markerRed, car.x, car.y);
+      g.markerGold.visible = false;
+      if (m.rivals.every((r) => r.state === 'down')) {
+        for (const rival of m.rivals) removePed(g, rival);
+        m.rivals = [];
+        m.phase = 'grabCase';
+        g.say(t('say.escortsDown.title'), t('say.escortsDown.sub'), 3);
+      }
+    } else if (m.phase === 'grabCase') {
+      if (car) setMarker(g, g.markerGold, car.x, car.y);
+      g.markerRed.visible = false;
+    } else if (m.phase === 'escapeHeat') {
+      hideMarkers(g);
+      if (g.stars === 0) {
+        m.phase = 'returnBruno';
+        g.say(t('say.clean.title'), t('say.clean.sub2'), 3.5);
+      }
+    } else if (m.phase === 'returnBruno') {
+      setMarker(g, g.markerGold, L.diner.x, L.diner.y);
+      g.markerRed.visible = false;
+      if (near(L.diner.x, L.diner.y, 56)) {
+        completeMission(g, 300, t('say.jobDone.mission4'));
+      }
+    }
+  } else if (m.index === 5) {
+    // WAREHOUSE RAID: the timed drive, two waves of fists, the crate,
+    // and a hot escape — the whole toolbox in one job.
+    if (m.phase === 'raidDrive') {
+      setMarker(g, g.markerGold, L.pier.x, L.pier.y);
+      g.markerRed.visible = false;
+      if (m.timeBonus) {
+        m.timer -= dt;
+        if (m.timer <= 0) {
+          m.timer = 0;
+          m.timeBonus = false;
+          g.say(t('say.timeBonusLost.title'), t('say.timeBonusLost.sub'), 3);
+        }
+      }
+      if (near(L.pier.x, L.pier.y, 72)) m.phase = 'raidDoor';
+    } else if (m.phase === 'raidDoor') {
+      setMarker(g, g.markerGold, L.pier.x, L.pier.y);
+      g.markerRed.visible = false;
+      if (near(L.pier.x, L.pier.y, 56) && p.state === 'foot') {
+        m.phase = 'raidFightDoor';
+        for (const rival of m.rivals) if (rival.state === 'idle') rival.state = 'fight';
+        g.say(t('say.raidGuards.title'), t('say.raidGuards.sub'), 3);
+      }
+    } else if (m.phase === 'raidFightDoor') {
+      setMarker(g, g.markerRed, L.pier.x, L.pier.y);
+      g.markerGold.visible = false;
+      if (m.rivals.every((r) => r.state === 'down')) {
+        for (const rival of m.rivals) removePed(g, rival);
+        // The yard crew becomes the fight: posted since accept time,
+        // they only wake now that the door is clear.
+        m.rivals = m.yardMen;
+        m.yardMen = [];
+        for (const rival of m.rivals) rival.state = 'fight';
+        m.phase = 'raidFightYard';
+        g.say(t('say.yard.title'), t('say.yard.sub'), 3);
+      }
+    } else if (m.phase === 'raidFightYard') {
+      const spot = crateSpot(g);
+      setMarker(g, g.markerRed, spot.x, spot.y);
+      g.markerGold.visible = false;
+      if (m.rivals.every((r) => r.state === 'down')) {
+        for (const rival of m.rivals) removePed(g, rival);
+        m.rivals = [];
+        m.phase = 'grabCrate';
+        g.say(t('say.yardDown.title'), t('say.yardDown.sub'), 3);
+      }
+    } else if (m.phase === 'grabCrate') {
+      const spot = crateSpot(g);
+      setMarker(g, g.markerGold, spot.x, spot.y);
+      g.markerRed.visible = false;
+    } else if (m.phase === 'raidEscapeCar') {
+      hideMarkers(g);
+      if (p.state === 'car') m.phase = 'loseLaw';
+    } else if (m.phase === 'loseLaw') {
+      hideMarkers(g);
+      if (g.stars === 0) {
+        m.phase = 'returnBruno';
+        g.say(t('say.clean.title'), t('say.clean.sub2'), 3.5);
+      }
+    } else if (m.phase === 'returnBruno') {
+      setMarker(g, g.markerGold, L.diner.x, L.diner.y);
+      g.markerRed.visible = false;
+      if (near(L.diner.x, L.diner.y, 56)) {
+        const reward = 450 + (m.timeBonus ? RAID_TIME_BONUS : 0);
+        completeMission(g, reward, t('say.jobDone.mission5'));
+        // The finale gets its own moment over the JOB DONE banner:
+        // the extended story is over, and Palmera knows it.
+        g.say(t('say.storyComplete.title'), t('say.storyComplete.sub', { reward: `$${reward}` }), 6.5);
+      }
+    }
   }
-  void dt;
 }
