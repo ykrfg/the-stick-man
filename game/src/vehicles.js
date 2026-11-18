@@ -147,7 +147,13 @@ export function spawnTrafficCar(g) {
     const lane = road + (dir > 0 ? -26 : 26);
     const x = onAvenue ? lane : along;
     const y = onAvenue ? along : lane;
-    if (Math.hypot(x - g.player.x, y - g.player.y) < 420) continue;
+    const dxp = x - g.player.x;
+    const dyp = y - g.player.y;
+    if (Math.hypot(dxp, dyp) < 560) continue;
+    // Nor anywhere inside the view box around the player: a fresh car
+    // must drive into the world, never materialize on screen — not even
+    // at the edge of the frame.
+    if (Math.abs(dxp) < 700 && Math.abs(dyp) < 460) continue;
     if (g.cars.some((c) => Math.hypot(c.x - x, c.y - y) < 80)) continue;
     const car = baseCar('traffic', x, y, 0, rng.pick(CAR_COLORS));
     car.axis = onAvenue ? 'y' : 'x';

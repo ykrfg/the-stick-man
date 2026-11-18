@@ -46,6 +46,24 @@ function hideMarkers(g) {
   g.markerRed.visible = false;
 }
 
+/**
+ * Post the current shop's collectors at its door. Called when the step
+ * becomes current — when the job is accepted and on each advance — never
+ * when the player arrives: two black figures loitering at the shopfront
+ * are part of the approach the player can see coming, not a pair of
+ * enemies materializing the instant the fight step triggers.
+ */
+function postCollectors(g) {
+  const m = g.mission;
+  const shop = g.city.shops[m.shopStep];
+  if (!shop) return;
+  m.rivals = [
+    spawnPed(g, { role: 'rival', x: shop.x + 30, y: shop.y - 16, shopIndex: m.shopStep }),
+    spawnPed(g, { role: 'rival', x: shop.x - 26, y: shop.y + 22, shopIndex: m.shopStep }),
+  ];
+  for (const rival of m.rivals) rival.state = 'idle';
+}
+
 /** Start the current mission (the player talked to Bruno). */
 export function acceptMission(g) {
   const m = g.mission;
@@ -58,10 +76,15 @@ export function acceptMission(g) {
     m.phase = 'toWarehouse';
   } else if (m.index === 1) {
     m.phase = 'toClub';
+    // Shade exists from the moment the job is taken: he waits at the club
+    // door the whole approach, so arriving reveals a man, not a spawn.
+    m.shade = spawnPed(g, { role: 'shade', x: L.club.x + 24, y: L.club.y + 10, name: 'SHADE' });
+    m.shade.fig.setExpression('angry');
+    m.shade.state = 'idle';
   } else {
     m.phase = 'toShop';
+    postCollectors(g);
   }
-  void L;
   g.say(MISSION_TITLES[m.index], INTRO_LINES[m.index], 5.5);
   g.events.push({ type: 'missionstart' });
 }
@@ -207,12 +230,8 @@ export function updateMissions(g, dt, time) {
       setMarker(g, g.markerGold, L.club.x, L.club.y);
       g.markerRed.visible = false;
       if (near(L.club.x, L.club.y, 52) && p.state === 'foot') {
-        m.shade = spawnPed(g, { role: 'shade', x: L.club.x + 24, y: L.club.y + 10, name: 'SHADE' });
-        m.shade.fig.setExpression('angry');
-        // Shade waits at the club door (like Bruno at the diner) instead of
-        // wandering the sidewalk graph — "come back for Shade" needs him
-        // findable in exactly one place.
-        m.shade.state = 'idle';
+        // Shade has been waiting at the club door since the job was taken
+        // (posted in acceptMission) — arriving just starts the next step.
         m.phase = 'getCar';
         g.say('SHADE', 'Bruno\'s getaway driver, one step ahead of the law. "Get us a car. Any car."', 4.5);
       }
@@ -254,12 +273,11 @@ export function updateMissions(g, dt, time) {
       setMarker(g, g.markerGold, shop.x, shop.y);
       g.markerRed.visible = false;
       if (near(shop.x, shop.y, 52) && p.state === 'foot') {
+        // The collectors were posted at this shop when the step became
+        // current (acceptMission / the previous shop's payoff) — the
+        // trigger only wakes the men the player already saw waiting.
         m.phase = 'fight';
-        m.rivals = [
-          spawnPed(g, { role: 'rival', x: shop.x + 30, y: shop.y - 16, shopIndex: m.shopStep }),
-          spawnPed(g, { role: 'rival', x: shop.x - 26, y: shop.y + 22, shopIndex: m.shopStep }),
-        ];
-        for (const rival of m.rivals) rival.state = 'fight';
+        for (const rival of m.rivals) if (rival.state === 'idle') rival.state = 'fight';
         g.say('COLLECTORS', '"This turf has new management, stick."', 3);
       }
     } else if (m.phase === 'fight') {
@@ -276,6 +294,7 @@ export function updateMissions(g, dt, time) {
           completeMission(g, 250, 'Every shop remembers who protects them.');
         } else {
           m.phase = 'toShop';
+          postCollectors(g);
           g.say('PAID UP', 'One shop down. Keep moving.', 2.6);
         }
       }
