@@ -5,7 +5,7 @@
 // the run's start, busted and wasted flows. In ?shot= mode it instead poses one
 // of the deterministic screenshot scenes from shots.js.
 import * as THREE from 'three';
-import { CAR, HEAT_FOR, PLAYER, SPRAY_PER_STAR } from './config.js';
+import { CAR, HEAT_FOR, MEAL_PRICE, PLAYER, SPRAY_PER_STAR, TREAT_PRICE } from './config.js';
 import { makeRng } from './random.js';
 import { Input } from './input.js';
 import { SoundFX } from './audio.js';
@@ -453,33 +453,49 @@ function updateInteractions(dt) {
   g.prompt = '';
   if (g.transition) return;
   if (p.state === 'foot') {
+    const L = g.city.landmarks;
     if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && missionAvailable(g)) {
       g.prompt = 'E — Talk to Bruno';
+    } else if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
+      g.prompt = `E — Eat at Bruno's ($${MEAL_PRICE}) — restores health`;
+    } else if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
+      g.prompt = `E — Get treated at St. Palm ($${TREAT_PRICE}) — restores health`;
     } else if (nearestEnterableCar()) {
       g.prompt = 'E — Steal car';
     }
     return;
   }
-  // In a car: the Spray 'n Go bay washes the heat off while you hold still.
+  // In a car: the Spray 'n Go bay is a full service while you hold still —
+  // fresh paint washes the heat off, and the same visit repairs the car,
+  // so a damaged car has a way back that does not need any heat at all.
   const zone = g.city.garageZone;
   const inZone = p.car
     && p.x > zone.x - 10 && p.x < zone.x + zone.w + 10
     && p.y > zone.y - 10 && p.y < zone.y + zone.h + 10;
-  if (inZone && g.heat > 0 && p.car && Math.abs(p.car.speed) < 25) {
-    const cost = Math.max(40, g.stars * SPRAY_PER_STAR);
-    g.prompt = `Spray 'n Go — fresh paint for $${cost}. Hold still…`;
+  const damaged = !!p.car && p.car.hp < 100;
+  if (inZone && p.car && Math.abs(p.car.speed) < 25 && (g.heat > 0 || damaged)) {
+    const repairFee = damaged ? Math.max(15, Math.round((100 - p.car.hp) * 0.5)) : 0;
+    const cost = (g.heat > 0 ? Math.max(40, g.stars * SPRAY_PER_STAR) : 0) + repairFee;
+    const what = g.heat > 0 && damaged ? 'paint + full repair' : damaged ? 'full repair' : 'fresh paint';
+    g.prompt = `Spray 'n Go — ${what} for $${cost}. Hold still…`;
     g.garageT += dt;
     if (g.garageT > 1.1) {
       g.garageT = -2.5;
       if (g.money >= cost) {
+        const hadHeat = g.heat > 0;
         g.money -= cost;
         g.heat = 0;
         g.stars = 0;
-        g.say("SPRAY 'N GO", 'New paint, new you. The heat is gone.', 3);
+        p.car.hp = 100;
+        g.say("SPRAY 'N GO", hadHeat && damaged
+          ? 'New paint, full repair. Good as new — and the heat is gone.'
+          : damaged
+            ? 'Full repair done. Good as new.'
+            : 'New paint, new you. The heat is gone.', 3);
         g.sfx.cash();
         persist();
       } else {
-        g.say("SPRAY 'N GO", 'Not enough cash to lose the heat.', 2.4);
+        g.say("SPRAY 'N GO", 'Not enough cash for the service.', 2.4);
       }
     }
   } else {
@@ -488,13 +504,47 @@ function updateInteractions(dt) {
   }
 }
 
-/** Handle the E key: talk, steal, or climb out — in that order. */
+/**
+ * Buy back health at a fixed spot: a meal at Bruno's, treatment at St. Palm.
+ * Forgiving on purpose — this is the convenience route back from a beating:
+ * the full price buys a full restore, and a short purse buys the share of
+ * it the player can afford, charged only what they actually had.
+ */
+function healAt(name, fullPrice, okLine, brokeLine) {
+  const p = g.player;
+  const missing = PLAYER.maxHp - p.hp;
+  if (missing <= 0) return;
+  if (g.money <= 0) {
+    g.say(name, brokeLine, 2.6);
+    g.sfx.tone('triangle', 160, 110, 0.08, 0.12);
+    return;
+  }
+  const frac = Math.min(1, g.money / fullPrice);
+  const healed = Math.max(1, Math.round(missing * frac));
+  const cost = Math.ceil(fullPrice * frac);
+  g.money -= cost;
+  p.hp = Math.min(PLAYER.maxHp, p.hp + healed);
+  g.say(name, `${okLine} +${healed} HP for $${cost}.`, 2.8);
+  g.sfx.cash();
+  persist();
+}
+
+/** Handle the E key: talk, heal, steal, or climb out — in that order. */
 function handleInteract() {
   const p = g.player;
   if (g.transition) return;
   if (p.state === 'foot') {
+    const L = g.city.landmarks;
     if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && missionAvailable(g)) {
       acceptMission(g);
+      return;
+    }
+    if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
+      healAt("BRUNO'S", MEAL_PRICE, 'A hot meal and a cold soda.', '"No cash, no stew, stick."');
+      return;
+    }
+    if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
+      healAt('ST. PALM', TREAT_PRICE, 'Patched up and sent on your way.', 'No cash, no care — the desk nurse shakes her head.');
       return;
     }
     const car = nearestEnterableCar();

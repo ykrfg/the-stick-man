@@ -186,6 +186,8 @@ function drawTitleMobile(g, ctx) {
     'Right buttons — USE · PUNCH · SHOOT',
     'USE — steal cars, talk, take jobs',
     'SPRINT — tap to toggle',
+    'DASH — burst of speed on foot',
+    "Heal at Bruno's / St. Palm · repair at Spray 'n Go",
     'Steal cars. Run jobs for Bruno.',
     'Mind the stars.',
   ];
@@ -236,11 +238,13 @@ function drawTitle(g, ctx) {
   ctx.font = '500 19px system-ui, sans-serif';
   ctx.fillStyle = '#e8ecf4';
   const lines = [
-    'WASD / Arrows — move        Shift — sprint',
+    'WASD / Arrows — move        Shift — sprint        Space — dash',
     'E — enter / exit car, talk        F or J — punch',
     'K or mouse click — shoot (once you have the pistol)',
     'Right-drag mouse — camera        Wheel — zoom',
     'Q (hold) — look back        P — pause        M — mute',
+    "Heal: eat at Bruno's · treatment at St. Palm Hospital",
+    "Repair your car: hold still in the Spray 'n Go bay",
     'Steal cars. Run jobs for Bruno. Mind the stars.',
   ];
   lines.forEach((line, i) => ctx.fillText(line, cx, 356 + i * 30));

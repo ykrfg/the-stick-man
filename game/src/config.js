@@ -75,3 +75,7 @@ export const SAVE_KEY = 'the-stick-man-save-v1';
 /** Price of the pistol at the Ammo Hut, and the Spray 'n Go fee per wanted star. */
 export const PISTOL_PRICE = 120;
 export const SPRAY_PER_STAR = 40;
+
+/** Recovery prices: a full-heal meal at Bruno's Diner, treatment at St. Palm. */
+export const MEAL_PRICE = 25;
+export const TREAT_PRICE = 40;
