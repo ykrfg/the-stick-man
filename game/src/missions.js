@@ -133,9 +133,9 @@ function postRaid(g) {
     spawnPed(g, { role: 'rival', x: L.pier.x + 42, y: L.pier.y - 28 }),
   ];
   m.yardMen = [
-    spawnPed(g, { role: 'rival', x: L.pier.x - 92, y: L.pier.y + 22, hp: 150, chase: 208, punchRate: 0.7 }),
-    spawnPed(g, { role: 'rival', x: L.pier.x, y: L.pier.y + 38, hp: 150, chase: 208, punchRate: 0.7 }),
-    spawnPed(g, { role: 'rival', x: L.pier.x + 92, y: L.pier.y + 22, hp: 150, chase: 208, punchRate: 0.7 }),
+    spawnPed(g, { role: 'rival', x: L.pier.x - 92, y: L.pier.y + 22, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
+    spawnPed(g, { role: 'rival', x: L.pier.x, y: L.pier.y + 38, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
+    spawnPed(g, { role: 'rival', x: L.pier.x + 92, y: L.pier.y + 22, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
   ];
   for (const ped of [...m.rivals, ...m.yardMen]) ped.state = 'idle';
 }
@@ -722,12 +722,13 @@ export function updateMissions(g, dt, time) {
       if (car && (car.wrecked || pinned)) {
         // The crew bails out swinging: two of Bruno-grade troublemakers
         // with more health and faster feet than the shop collectors.
-        // (NPCs have no guns in Palmera — the combat system only arms
-        // the player — so the escorts fight as elite fist fighters.)
+        // (They carry pistols you can see — gun in hand, raised in the
+        // fight — but Palmera's combat system only lets the player
+        // shoot, so the escorts fight as elite fist fighters.)
         car.speed = 0;
         m.rivals = [
-          spawnPed(g, { role: 'rival', x: car.x + 32, y: car.y + 20, hp: 150, chase: 208, punchRate: 0.7 }),
-          spawnPed(g, { role: 'rival', x: car.x - 32, y: car.y - 20, hp: 150, chase: 208, punchRate: 0.7 }),
+          spawnPed(g, { role: 'rival', x: car.x + 32, y: car.y + 20, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
+          spawnPed(g, { role: 'rival', x: car.x - 32, y: car.y - 20, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
         ];
         for (const rival of m.rivals) rival.state = 'fight';
         m.phase = 'escortsFight';

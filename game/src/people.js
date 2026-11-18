@@ -28,14 +28,16 @@ let pedSeq = 0;
  * Create one person and add its figure to the scene. role decides the behaviour
  * and the look: 'ped' (citizen, mixed fills), 'rival' (black, hostile), 'cop'
  * (black with a blue cap, arrests), 'shade' (black, the getaway passenger),
- * 'bruno' (black, stands at the diner and hands out missions).
+ * 'bruno' (black, stands at the diner and hands out missions). The `armed`
+ * option puts the visible pistol in the right hand (mission gunmen); it
+ * changes the look and the fight pose, never the mechanics.
  */
 // Pedestrian A-type heads wear warm off-whites — close to the hero's look,
 // but never his pure #ffffff: in a crowd, the one PURE white head is the
 // player's. The slight per-person variation keeps the crowd individual.
 const PED_HEAD_TINTS = [0xe7dfc9, 0xdfd7c2, 0xe9e3d3, 0xdcd4bd, 0xe2dbc9];
 
-export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex = -1, hp = null, chase = null, punchRate = null } = {}) {
+export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex = -1, hp = null, chase = null, punchRate = null, armed = false } = {}) {
   const rng = g.rng;
   let spot = { x, y, axis: 'y', line: x, dir: 1 };
   if (x === 0 && y === 0) {
@@ -48,6 +50,7 @@ export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex
     fill: black ? 'black' : 'white',
     headColor: black ? undefined : rng.pick(PED_HEAD_TINTS),
     cap: role === 'cop' ? 0x2f7bff : null,
+    armed,
   });
   const ped = {
     id: (pedSeq += 1),
@@ -78,6 +81,10 @@ export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex
     // asks for them. Null keeps the role defaults in the fight case.
     chase,
     punchRate,
+    // Visibly carries the pistol (mission gunmen). A look, not a
+    // mechanic: syncFigure raises the gun arm in the fight state, and
+    // the fist does the rest exactly as before.
+    armed: !!armed,
     exprT: 0,
     baseExpr: role === 'ped' ? 'neutral' : 'angry',
   };
@@ -191,6 +198,12 @@ export function syncFigure(ent, dt, time, groundY = 0) {
   ent.fig.group.position.set(ent.x, groundY, ent.y);
   ent.fig.group.rotation.y = -ent.angle;
   ent.fig.target.speed = Math.min(1.4, ent.speedNow / 200);
+  // A gunman in the fight holds the pistol up on the player — the rig's
+  // aim pose on the gun arm, which the ped's facing (set by the fight
+  // state) points at him. Posted, walking or down, the arm hangs and
+  // the pistol rides at his side. Only armed peds are touched: the
+  // player's own aim is combat.js's business.
+  if (ent.armed) ent.fig.target.aim = ent.state === 'fight' ? 1 : 0;
   ent.fig.update(dt, time);
 }
 

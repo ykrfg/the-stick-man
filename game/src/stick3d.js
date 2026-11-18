@@ -131,6 +131,9 @@ function segment(radius, length, material, jointRadius) {
  *   headColor: explicit head colour override (pedestrians wear off-whites so
  *     the hero's pure white stays his alone),
  *   cap: a colour for a flat cap (police officers), or null,
+ *   armed: hold the little pistol in the right hand from birth (mission
+ *     gunmen — it stays in the fist through punches, dives and knockdowns;
+ *     setGun toggles it at runtime),
  *   scale: overall size multiplier.
  * }
  * The returned figure exposes group (place and yaw this), tilt, setExpression,
@@ -267,15 +270,27 @@ export function createFigure(opts = {}) {
     neck.add(brim);
   }
 
-  // A little pistol that appears in the right hand when the figure is armed.
+  // A little pistol in the right hand, shown when the figure is armed.
+  // It is built along the forearm's own axis — barrel running past the
+  // fist, grip raked back behind it — so the one mount reads in every
+  // pose the rig solves: arm hanging, the muzzle points down at the
+  // figure's side with the grip block clear of the hand; arm raised in
+  // the aim pose, the barrel swings up to point straight along the arm,
+  // at whoever the figure is facing. Slightly chunky on purpose, with
+  // the same inverted-hull outline as the other props, so a dark pistol
+  // shape reads in the hand at gameplay distance, not only close up.
   const gun = new THREE.Group();
-  const gunBody = new THREE.Mesh(new THREE.BoxGeometry(8.5, 2.0, 1.7), basicMat(0x26262c));
-  gunBody.position.set(3.4, 0.35, 0);
-  const gunGrip = new THREE.Mesh(new THREE.BoxGeometry(2.0, 3.6, 1.6), basicMat(0x26262c));
-  gunGrip.position.set(0.3, -1.7, 0);
+  const gunMat = basicMat(0x2a2a31);
+  const gunBody = new THREE.Mesh(new THREE.BoxGeometry(2.0, 8.6, 1.8), gunMat);
+  gunBody.position.set(0, -3.5, 0);
+  outline(gunBody, 1.16);
+  const gunGrip = new THREE.Mesh(new THREE.BoxGeometry(1.9, 3.9, 1.6), gunMat);
+  gunGrip.position.set(-1.35, -0.9, 0);
+  gunGrip.rotation.z = -0.3;
+  outline(gunGrip, 1.14);
   gun.add(gunBody, gunGrip);
   gun.position.y = -7.9;
-  gun.visible = false;
+  gun.visible = !!opts.armed;
   armR.fore.add(gun);
 
   if (opts.scale) group.scale.setScalar(opts.scale);
@@ -284,6 +299,8 @@ export function createFigure(opts = {}) {
     group,
     tilt,
     shadow,
+    gun,
+    armed: !!opts.armed,
     parts: { pelvis, spine, neck, legL, legR, armL, armR },
     target: { speed: 0, crouch: 0, drive: 0, aim: 0, down: 0 },
     cur: { speed: 0, crouch: 0, drive: 0, aim: 0, down: 0 },
