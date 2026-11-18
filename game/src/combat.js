@@ -13,6 +13,59 @@ import { makeCashPickup } from './world3d.js';
 
 const bulletGeo = new THREE.BoxGeometry(7, 1.8, 1.8);
 const bulletMat = basicMat(0xffe066);
+// One shared ring and spoke for impact bursts; each burst gets its own
+// material so it can fade without touching anyone else's.
+const impactGeo = new THREE.RingGeometry(2.1, 3.0, 16);
+const sparkGeo = new THREE.BoxGeometry(3.8, 0.75, 1.0);
+
+/**
+ * A short radial burst at the point of contact: a shockwave disc facing
+ * along the blow with six spokes around it. It lives just over a fifth of
+ * a second, which is long enough to read as "that connected" at 60 fps
+ * and short enough to never pile up in a brawl. Screenshot scenes call
+ * this once and never update it, so the still keeps the freeze-frame.
+ * `angle` is the direction of the punch, which the disc faces; the
+ * camera sits behind the puncher, so it is seen face-on in play.
+ */
+export function spawnImpact(g, x, y, angle = 0, height = 24) {
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xfff3c4, transparent: true, opacity: 0.95,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const group = new THREE.Group();
+  const ring = new THREE.Mesh(impactGeo, mat);
+  ring.renderOrder = 950;
+  group.add(ring);
+  for (let i = 0; i < 6; i += 1) {
+    const a = (i / 6) * Math.PI * 2 + 0.4;
+    const bar = new THREE.Mesh(sparkGeo, mat);
+    bar.position.set(Math.cos(a) * 6.8, Math.sin(a) * 6.8, 0);
+    bar.rotation.z = a;
+    bar.renderOrder = 950;
+    group.add(bar);
+  }
+  group.position.set(x, height, y);
+  group.rotation.y = Math.PI / 2 - angle; // local +z along the blow
+  g.scene.add(group);
+  g.impacts.push({ t: 0, dur: 0.22, group, mat });
+}
+
+/** Advance and retire every live impact burst. */
+export function updateImpacts(g, dt) {
+  for (const im of [...g.impacts]) {
+    im.t += dt;
+    const k = im.t / im.dur;
+    if (k >= 1) {
+      g.scene.remove(im.group);
+      im.mat.dispose();
+      g.impacts.splice(g.impacts.indexOf(im), 1);
+      continue;
+    }
+    im.group.scale.setScalar(0.55 + k * 1.9);
+    im.group.position.y += 3 * dt;
+    im.mat.opacity = 0.95 * (1 - k) ** 1.4;
+  }
+}
 
 /** Angle difference wrapped to -PI..PI. */
 function angleDiff(a, b) {
@@ -54,6 +107,10 @@ function fireBullet(g) {
 function landPunch(g) {
   const p = g.player;
   let hitSomething = false;
+  let hitX = 0;
+  let hitY = 0;
+  let hitAngle = p.angle;
+  let hitHeight = 30; // fists land at head height on a figure
   for (const ped of g.peds) {
     if (ped.state === 'down' || ped.state === 'inCar') continue;
     const d = Math.hypot(ped.x - p.x, ped.y - p.y);
@@ -63,6 +120,11 @@ function landPunch(g) {
     hurtPed(g, ped, PLAYER.punchDamage);
     ped.x += Math.cos(dir) * 9;
     ped.y += Math.sin(dir) * 9;
+    if (!hitSomething) {
+      hitX = ped.x;
+      hitY = ped.y;
+      hitAngle = dir;
+    }
     g.events.push({ type: 'crime', kind: ped.role === 'cop' ? 'punchCop' : 'punchPed', x: ped.x, y: ped.y });
     hitSomething = true;
   }
@@ -76,8 +138,19 @@ function landPunch(g) {
     // cars at hp <= 0 still upright, enterable and drivable, and made
     // traffic cars unkillable by fists and bullets.
     damageCar(g, car, 8);
+    if (!hitSomething) {
+      hitX = car.x;
+      hitY = car.y;
+      hitAngle = p.angle;
+      hitHeight = 16; // a car hit reads at bonnet height, not head height
+    }
     g.events.push({ type: 'crime', kind: 'hitCar', x: car.x, y: car.y });
     hitSomething = true;
+  }
+  if (hitSomething) {
+    spawnImpact(g, hitX, hitY, hitAngle, hitHeight);
+    // A punch that lands reads through the camera as well as the arm.
+    g.shake = Math.max(g.shake, 2.8);
   }
   g.events.push({ type: hitSomething ? 'punchhit' : 'punchmiss' });
 }
@@ -85,16 +158,25 @@ function landPunch(g) {
 /** The player's attacks for one frame: punch taps, held gunfire, landing strikes. */
 export function updateCombat(g, dt) {
   const p = g.player;
+  updateImpacts(g, dt);
   p.punchCd = Math.max(0, p.punchCd - dt);
   p.shotCd = Math.max(0, p.shotCd - dt);
   if (p.punchHitT > 0) {
     p.punchHitT -= dt;
     if (p.punchHitT <= 0) landPunch(g);
   }
-  if (p.state !== 'foot') return;
+  // The aim state is a rig target, and it has to settle in every state:
+  // it used to stop being written the moment he sat in a car, so a shot
+  // fired while running for the door left the driving arm raised for
+  // the whole trip.
+  p.fig.target.aim = p.aimT > 0 ? 1 : 0;
+  if (p.aimT > 0) p.aimT -= dt;
+  if (p.state !== 'foot' || g.transition) return;
   if (g.input.tapped('KeyF', 'KeyJ') && p.punchCd <= 0) {
     p.punchCd = PLAYER.punchCooldown;
-    p.punchHitT = 0.13;
+    // The rig's strike reaches full extension 46% into its 0.44 s punch:
+    // this is when the fist actually arrives, so the damage waits for it.
+    p.punchHitT = 0.2;
     p.fig.triggerPunch();
     p.fig.setExpression('angry');
     p.exprT = 0.45;
@@ -108,8 +190,6 @@ export function updateCombat(g, dt) {
     p.fig.setExpression('shout');
     p.exprT = 0.3;
   }
-  p.fig.target.aim = p.aimT > 0 ? 1 : 0;
-  if (p.aimT > 0) p.aimT -= dt;
 }
 
 /** Move every bullet, test it against buildings, people and cars. */

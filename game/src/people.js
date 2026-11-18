@@ -198,6 +198,16 @@ export function syncFigure(ent, dt, time, groundY = 0) {
   ent.fig.group.position.set(ent.x, groundY, ent.y);
   ent.fig.group.rotation.y = -ent.angle;
   ent.fig.target.speed = Math.min(1.4, ent.speedNow / 200);
+  // Lean into the corner: the arc turned this frame, scaled by how fast
+  // he is moving, feeds the rig's bank (clamped, then damped inside
+  // stick3d). Walking straight banks nothing; cutting a corner at speed
+  // tips the shoulders a few degrees into the line and settles back.
+  const prevAngle = ent.figAngle ?? ent.angle;
+  const arc = angleArc(prevAngle, ent.angle);
+  ent.figAngle = ent.angle;
+  const rate = dt > 0 ? arc / dt : 0;
+  const pace = Math.min(1, (ent.speedNow ?? 0) / 170);
+  ent.fig.target.bank = Math.max(-0.85, Math.min(0.85, rate * 0.05)) * pace;
   // A gunman in the fight holds the pistol up on the player — the rig's
   // aim pose on the gun arm, which the ped's facing (set by the fight
   // state) points at him. Posted, walking or down, the arm hangs and
@@ -221,8 +231,16 @@ export function seatDriverFigure(g, dt, time) {
   const s = Math.sin(car.angle);
   p.fig.group.position.set(car.x + lx * c - ly * s, 2, car.y + lx * s + ly * c);
   p.fig.group.rotation.y = -car.angle;
+  p.angle = car.angle;
   p.fig.target.drive = 1;
   p.fig.target.speed = 0;
+  // A seated driver does not bank, crouch, aim or reach for a door: the
+  // walk-cycle and climb targets must be cleared, or the arm stays up
+  // from a punch fired while running for the door.
+  p.fig.target.bank = 0;
+  p.fig.target.crouch = 0;
+  p.fig.target.reach = 0;
+  p.fig.target.aim = 0;
   p.fig.shadow.visible = false;
   p.fig.update(dt, time);
 }

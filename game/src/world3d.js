@@ -58,6 +58,28 @@ function makeRoadTexture(horizontal) {
   return tex;
 }
 
+/**
+ * A plain asphalt tile for the crossing squares. The avenue/street
+ * planes draw their surface from a canvas map; those canvas pixels are
+ * sampled as linear data here (the project's textures are not tagged
+ * sRGB), so a FLAT toon material of the same declared hex renders
+ * markedly darker than the road around it — the crossings read as
+ * puddles. Using a map with the identical fill makes both surfaces go
+ * through the same path, so the square merges with the road exactly.
+ */
+function makeAsphaltTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 4;
+  canvas.height = 4;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = COLORS.road;
+  ctx.fillRect(0, 0, 4, 4);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
+}
+
 function flatPlane(w, h, material) {
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), material);
   mesh.rotation.x = -Math.PI / 2;
@@ -344,10 +366,13 @@ export function buildWorld(scene, city) {
     p.position.set(WORLD.width / 2, 0.28, street);
     group.add(p);
   }
-  const asphaltMat = toonMat(0x4a4a52);
-  asphaltMat.polygonOffset = true;
-  asphaltMat.polygonOffsetFactor = -2;
-  asphaltMat.polygonOffsetUnits = -2;
+  const asphaltMat = new THREE.MeshToonMaterial({
+    map: makeAsphaltTexture(),
+    gradientMap: toonGradient(),
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
   for (const avenue of ROAD.avenues) {
     for (const street of ROAD.streets) {
       const p = flatPlane(ROAD.width, ROAD.width, asphaltMat);

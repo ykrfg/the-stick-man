@@ -18,6 +18,10 @@ const cabinGeo = new THREE.BoxGeometry(24, 8.5, 20.5);
 /** Build the mesh for one car. Police cars get a stripe and a flashing light bar. */
 export function makeCarMesh(colorHex, police = false) {
   const group = new THREE.Group();
+  // Yaw first, then roll about the car's own nose (syncCarMesh writes
+  // rotation.x with the body roll). Without this order a roll would tip
+  // the car about a world axis instead of its own.
+  group.rotation.order = 'YXZ';
   const body = new THREE.Mesh(bodyGeo, toonMat(police ? 0xf4f4f4 : colorHex));
   body.position.y = 8.5;
   const hull = new THREE.Mesh(bodyGeo, basicMat(0x17181c));
@@ -93,6 +97,12 @@ function baseCar(kind, x, y, angle, colorHex) {
     // to hp <= 0 while the player drove it: it never moves again.
     touched: false,
     wrecked: false,
+    // Driving feel only (the player's car): body roll into a corner, and
+    // the handbrake's slide — the angle by which the car's travel lags
+    // its nose. Both settle back to 0 on their own.
+    lean: 0,
+    drift: 0,
+    skidT: 0,
     // Traffic state (lane following):
     axis: 'y', road: 0, dir: 1, lane: 0, turnCd: 0,
     // Police state:
@@ -112,9 +122,12 @@ export function syncCarMesh(car, dt) {
   }
   if (!Number.isFinite(car.angle)) car.angle = 0;
   if (!Number.isFinite(car.speed)) car.speed = 0;
+  if (!Number.isFinite(car.lean)) car.lean = 0;
+  if (!Number.isFinite(car.drift)) car.drift = 0;
   // A wreck sits low and tilted, so it reads as a dead car, not a good one.
   car.mesh.position.set(car.x, car.wrecked ? -1.4 : 0, car.y);
   car.mesh.rotation.y = -car.angle;
+  car.mesh.rotation.x = car.wrecked ? 0 : car.lean;
   car.mesh.rotation.z = car.wrecked ? 0.07 : 0;
   car.wheelSpin += (car.speed * dt) / 5.6;
   for (const wheel of car.wheels) wheel.rotation.z = -car.wheelSpin;
@@ -349,8 +362,11 @@ export function moveFreeCar(g, car, dt) {
   }
   applyShove(car, dt);
   const prevSpeed = car.speed;
-  car.x += Math.cos(car.angle) * car.speed * dt;
-  car.y += Math.sin(car.angle) * car.speed * dt;
+  // While drifting, the car travels a little wide of where its nose
+  // points — that gap is the slide. Every other driver keeps drift 0.
+  const travel = car.angle - (car.drift ?? 0);
+  car.x += Math.cos(travel) * car.speed * dt;
+  car.y += Math.sin(travel) * car.speed * dt;
   clampToWorld(car, 30);
   const attX = car.x;
   const attY = car.y;
@@ -367,8 +383,8 @@ export function moveFreeCar(g, car, dt) {
     const pushY = car.y - attY;
     const pushLen = Math.hypot(pushX, pushY);
     if (pushLen > 0.01) {
-      const vx = Math.cos(car.angle) * prevSpeed;
-      const vy = Math.sin(car.angle) * prevSpeed;
+      const vx = Math.cos(travel) * prevSpeed;
+      const vy = Math.sin(travel) * prevSpeed;
       const closing = -(vx * (pushX / pushLen) + vy * (pushY / pushLen));
       if (closing > 80) {
         crashDamageCar(g, car, Math.min(1, closing / 420) * CRASH_DAMAGE.wall);
@@ -390,8 +406,8 @@ export function moveFreeCar(g, car, dt) {
     // how fast the gap between the two cars is shrinking — never either
     // car's raw speed. Two cars cruising at the same speed have a closing
     // speed of zero: they must grind against each other, not bounce apart.
-    const relVx = Math.cos(car.angle) * car.speed - Math.cos(other.angle) * (other.speed || 0);
-    const relVy = Math.sin(car.angle) * car.speed - Math.sin(other.angle) * (other.speed || 0);
+    const relVx = Math.cos(travel) * car.speed - Math.cos(other.angle) * (other.speed || 0);
+    const relVy = Math.sin(travel) * car.speed - Math.sin(other.angle) * (other.speed || 0);
     const closing = -(relVx * nx + relVy * ny);
     // Positional separation always applies: it is what lets a slow push
     // grind a stopped or slower car ahead of you instead of bouncing off.
@@ -512,7 +528,8 @@ export function updatePlayerCarHits(g) {
 }
 
 /** The player's driving: arcade acceleration, braking, steering and drag. */
-export function drivePlayerCar(g, dt) {  const car = g.player.car;
+export function drivePlayerCar(g, dt) {
+  const car = g.player.car;
   if (!car || car.wrecked) return;
   const axes = g.input.axes();
   const throttle = -axes.y;
@@ -526,9 +543,36 @@ export function drivePlayerCar(g, dt) {  const car = g.player.car;
     car.speed -= car.speed * 0.5 * dt;
     if (Math.abs(car.speed) < 4) car.speed = 0;
   }
+  // --- Handbrake (Space; the touch DASH button doubles as BRAKE in a
+  // car). Held at speed it lets the nose come round faster than grip
+  // would allow, scrubs a little speed, and lets the car's travel lag
+  // behind its heading — the rear steps out and the slide is visible
+  // from behind. Released, grip returns and the drift washes out.
+  const speedAbs = Math.abs(car.speed);
+  const handbrake = g.input.down('Space');
+  const sliding = handbrake && speedAbs > 90;
   if (car.speed !== 0) {
     const grip = Math.max(-1, Math.min(1, car.speed / 130));
-    car.angle += steer * CAR.turnRate * dt * grip;
+    car.angle += steer * CAR.turnRate * (sliding ? 1.6 : 1) * dt * grip;
+  }
+  if (sliding) {
+    const dir = Math.sign(car.speed) || 1;
+    car.drift = Math.max(-0.5, Math.min(0.5, (car.drift ?? 0) + steer * dir * 2.1 * dt));
+    car.speed -= car.speed * 0.45 * dt;
+  } else {
+    car.drift = (car.drift ?? 0) * Math.max(0, 1 - 5 * dt);
+    if (Math.abs(car.drift) < 0.002) car.drift = 0;
+  }
+  // Body roll: onto the outside wheels through a corner, deeper while
+  // sliding, and gone the moment the car is parked or wrecked.
+  const leanTarget = -steer * Math.min(1, speedAbs / 300)
+    * (0.07 + Math.abs(car.drift ?? 0) * 0.3);
+  car.lean = (car.lean ?? 0) + (leanTarget - (car.lean ?? 0)) * Math.min(1, 8 * dt);
+  // One screech per slide beat, not one per frame.
+  car.skidT = (car.skidT ?? 0) - dt;
+  if (sliding && car.skidT <= 0) {
+    car.skidT = 0.42;
+    g.events.push({ type: 'screech', strength: Math.min(1, speedAbs / 380) });
   }
   moveFreeCar(g, car, dt);
   // The player rides inside: keep the figure glued to the driver's seat.

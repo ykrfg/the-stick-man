@@ -113,6 +113,12 @@ export class SoundFX {
     this.tone('sine', 110, 40, 0.18, 0.22 * strength);
   }
 
+  /** Tyre screech for a handbrake slide: bright noise with a falling whine. */
+  screech(strength = 1) {
+    this.noise(0.24, 0.12 * strength, 3000);
+    this.tone('sawtooth', 1150, 640, 0.22, 0.05 * strength);
+  }
+
   alarm() {
     this.tone('square', 440, 440, 0.12, 0.16);
     this.tone('square', 440, 440, 0.12, 0.16, 0.18);

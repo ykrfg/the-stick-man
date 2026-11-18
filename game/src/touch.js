@@ -216,10 +216,15 @@ export function initTouch(g) {
       lastPistol = pistol;
       btnShoot.style.display = pistol ? 'flex' : 'none';
     }
-    // Dash lives on foot only, and dims while its cooldown runs down.
+    // Dash lives on foot only; in a car the same button is the
+    // handbrake (both write Space), so it stays up with its label
+    // switched. It dims while the on-foot dash cools down.
     const onFoot = state === 'play' && g.player.state === 'foot';
-    btnDash.style.display = onFoot ? 'flex' : 'none';
+    const driving = state === 'play' && g.player.state === 'car' && !!g.player.car;
+    btnDash.style.display = onFoot || driving ? 'flex' : 'none';
     btnDash.classList.toggle('cool', onFoot && (g.player.dashCd ?? 0) > 0);
+    const dashLabel = t(driving ? 'touch.brake' : 'touch.dash');
+    if (btnDash.textContent !== dashLabel) btnDash.textContent = dashLabel;
     // A language switch re-labels the static buttons once (main.js also
     // calls relabel() directly; this keeps update() self-sufficient).
     if (g.lang !== lastLang) {

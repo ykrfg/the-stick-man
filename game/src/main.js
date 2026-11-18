@@ -63,6 +63,7 @@ const g = {
   peds: [],
   bullets: [],
   pickups: [],
+  impacts: [],
   events: [],
   money: 0,
   earned: 0,
@@ -86,6 +87,10 @@ const g = {
   robbery: null, // { shop, t } while a hold-up is being stood through
   robbedAt: {}, // shop index -> g.time of its last completed hold-up
   shake: 0,
+  // A landed punch stops the world for a few frames (see frame()): the
+  // hit reads as weight, not as a hand passing through. Seconds of real
+  // time left; only the play state's world update takes the freeze.
+  hitstop: 0,
   lastFine: 0,
   // Progress-reset confirm state (title / pause): the first R press or
   // RESET PROGRESS tap arms it, a second within a few seconds wipes the
@@ -221,6 +226,19 @@ function syncLangToggle() {
 window.__sm = g;
 g.camera = camera; // debug handle for the headless camera checks
 g.heroMark = heroMark;
+// Let a headless harness that cannot rely on rAF (hidden window) still step
+// and render a frame on demand, and let it write a shot at the 1280x720 size
+// the official screenshots use.
+window.__frame = () => frame(performance.now());
+window.__resize = (w, h) => {
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  hudCanvas.width = w;
+  hudCanvas.height = h;
+  g.viewW = w;
+  g.viewH = h;
+};
 
 function persist() {
   g.saveData.money = g.money;
@@ -337,6 +355,11 @@ function finishEnterCar() {
   g.transition = null;
   p.state = 'car';
   p.car = car;
+  p.angle = car.angle;
+  p.fig.target.crouch = 0;
+  p.fig.target.reach = 0;
+  p.fig.target.bank = 0;
+  p.fig.target.aim = 0;
   car.occupant = 'player';
   // The car is the player's now — and the fleet systems key off `kind`:
   // traffic cars lane-drive themselves and despawn at range, police cars
@@ -370,14 +393,37 @@ function exitCar() {
   const car = p.car;
   if (!car) return;
   const a = car.angle;
-  p.x = car.x + Math.sin(a) * 36;
-  p.y = car.y - Math.cos(a) * 36;
+  const lx = -2;
+  const ly = -6;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  // The figure is sitting at the seat offset, not on the car's centre.
+  // The step-out starts there and swings to the door: a 0.3 s transition
+  // so the hero climbs out instead of teleporting to the kerb. He is
+  // already on foot for every gameplay system (state, collision, hits);
+  // only the pose and the position are carried by the transition.
+  const seatX = car.x + lx * c - ly * s;
+  const seatY = car.y + lx * s + ly * c;
+  p.x = seatX;
+  p.y = seatY;
   p.angle = a;
   car.occupant = null;
   p.car = null;
   p.state = 'foot';
-  p.fig.target.drive = 0;
+  p.fig.target.drive = 1; // the transition eases this out
+  p.fig.target.bank = 0;
+  p.fig.target.reach = 0.6;
   p.fig.shadow.visible = true;
+  g.transition = {
+    kind: 'exit',
+    t: 0,
+    dur: 0.32,
+    fromX: seatX,
+    fromY: seatY,
+    doorX: car.x + Math.sin(a) * 36,
+    doorY: car.y - Math.cos(a) * 36,
+    angle: a,
+  };
   g.sfx.carDoor();
 }
 
@@ -447,8 +493,15 @@ function processEvents() {
         g.sfx.shoot();
         addHeat(g, HEAT_FOR.shotFired, p.x, p.y);
         break;
-      case 'punchhit': g.sfx.punch(); break;
+      case 'punchhit':
+        g.sfx.punch();
+        // The world stops for a few frames on a landed blow. This is the
+        // single biggest "the punch has weight" cue; it is short enough
+        // (three frames) that it never reads as a stutter.
+        g.hitstop = Math.max(g.hitstop, 0.05);
+        break;
       case 'punchmiss': g.sfx.tone('triangle', 150, 90, 0.05, 0.1); break;
+      case 'screech': g.sfx.screech(ev.strength ?? 1); break;
       case 'cash':
         g.sfx.cash();
         g.toast = { text: `+$${ev.amount}`, t: 1.6 };
@@ -472,6 +525,7 @@ function processEvents() {
         break;
       case 'npcpunch': {
         g.sfx.punch();
+        g.hitstop = Math.max(g.hitstop, 0.04);
         if (ev.targetCar && p.car) {
           // Fists drain the car 6 a hit; damageCar owns the crossing to
           // the wreck state (and the 'playerwreck' event below runs the
@@ -1069,14 +1123,43 @@ function frame(now) {
       // Camera control first: movement below reads the yaw settled here.
       updateCameraControl(dt);
       const p = g.player;
-      // Car enter/exit transition: a crouched scramble to the door.
-      if (g.transition) {
+      // Hit stop: a landed punch freezes the WORLD for a few frames —
+      // camera, HUD, banners and input keep running on real dt. A zero
+      // world-dt leaves every damping value where it was and holds the
+      // strike at the exact frame of contact, which is what gives a
+      // punch its weight. It gates the world update only, never a timer
+      // the player is waiting on for more than a few frames.
+      const wdt = g.hitstop > 0 ? 0 : dt;
+      if (g.hitstop > 0) g.hitstop = Math.max(0, g.hitstop - dt);
+      if (g.transition?.kind === 'exit') {
+        // Stepping out: from the seat to the kerb, rising out of the
+        // drive pose while the reach comes down off the door.
+        const tr = g.transition;
+        tr.t += wdt;
+        const k = Math.min(1, tr.t / tr.dur);
+        const e = k * k * (3 - 2 * k);
+        p.x = tr.fromX + (tr.doorX - tr.fromX) * e;
+        p.y = tr.fromY + (tr.doorY - tr.fromY) * e;
+        p.angle = tr.angle;
+        p.fig.target.drive = Math.max(0, 1 - e * 1.35);
+        p.fig.target.crouch = Math.sin(Math.min(1, k) * Math.PI) * 0.55;
+        p.fig.target.reach = Math.max(0, 1 - k * 1.8);
+        p.fig.target.bank = 0;
+        p.speedNow = 90 * (1 - e);
+        syncFigure(p, wdt, g.time);
+        if (k >= 1) {
+          g.transition = null;
+          p.fig.target.crouch = 0;
+          p.fig.target.reach = 0;
+        }
+      } else if (g.transition) {
         const tr = g.transition;
         if (tr.car.wrecked || !g.cars.includes(tr.car)) {
           // The car died (or was removed) mid-scramble: there is no
           // seat to take, so the scramble just ends where he stands.
           g.transition = null;
           p.fig.target.crouch = 0;
+          p.fig.target.reach = 0;
         } else {
           // The door is wherever the car is NOW, not where it was when
           // E was pressed: a moving car does not wait for a man
@@ -1085,36 +1168,45 @@ function frame(now) {
           // (or, to the player, looking like the car refused him).
           // Tracking the door makes him run alongside and climb in as
           // it rolls — and a stopped car behaves exactly as before.
+          // The approach eases in and out, the body turns to the door
+          // and the right hand comes up to the handle in the last half:
+          // a scramble, not a slide.
           const a = tr.car.angle;
           tr.doorX = tr.car.x + Math.sin(a) * 34;
           tr.doorY = tr.car.y - Math.cos(a) * 34;
-          tr.t += dt;
+          tr.t += wdt;
           const k = Math.min(1, tr.t / tr.dur);
-          p.x = tr.fromX + (tr.doorX - tr.fromX) * k;
-          p.y = tr.fromY + (tr.doorY - tr.fromY) * k;
+          const e = k * k * (3 - 2 * k);
+          p.x = tr.fromX + (tr.doorX - tr.fromX) * e;
+          p.y = tr.fromY + (tr.doorY - tr.fromY) * e;
+          const face = Math.atan2(tr.doorY - p.y, tr.doorX - p.x);
+          if (Number.isFinite(face) && wdt > 0) {
+            p.angle += angleArc(p.angle, face) * (1 - Math.exp(-10 * wdt));
+          }
           p.fig.target.crouch = Math.sin(k * Math.PI) * 0.9;
-          p.speedNow = 60;
-          syncFigure(p, dt, g.time);
+          p.fig.target.reach = k > 0.35 ? Math.min(1, (k - 0.35) / 0.4) : 0;
+          p.speedNow = 60 + 70 * (1 - k);
+          syncFigure(p, wdt, g.time);
           if (k >= 1) finishEnterCar();
         }
       } else if (p.state === 'foot') {
-        updatePlayerOnFoot(g, dt);
-        syncFigure(p, dt, g.time);
+        updatePlayerOnFoot(g, wdt);
+        syncFigure(p, wdt, g.time);
       } else {
-        drivePlayerCar(g, dt);
-        seatDriverFigure(g, dt, g.time);
+        drivePlayerCar(g, wdt);
+        seatDriverFigure(g, wdt, g.time);
       }
       if (input.tapped('KeyE')) handleInteract();
       g.aimAngle = p.state === 'foot' ? computeAimAngle() : null;
-      updateTraffic(g, dt);
-      updatePeds(g, dt, g.time);
-      updateCombat(g, dt);
-      updateBullets(g, dt);
-      updatePickups(g, dt, g.time);
-      updatePolice(g, dt, g.time);
+      updateTraffic(g, wdt);
+      updatePeds(g, wdt, g.time);
+      updateCombat(g, wdt);
+      updateBullets(g, wdt);
+      updatePickups(g, wdt, g.time);
+      updatePolice(g, wdt, g.time);
       updatePlayerCarHits(g);
-      updateMissions(g, dt, g.time);
-      updateInteractions(dt);
+      updateMissions(g, wdt, g.time);
+      updateInteractions(wdt);
       processEvents();
       // Player expression settles back to a grin (or a scowl under heat).
       if (p.exprT > 0) {

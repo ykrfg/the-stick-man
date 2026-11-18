@@ -179,7 +179,11 @@ export function createFigure(opts = {}) {
   pelvisBall.scale.set(2.1, 1.8, 2.1);
   pelvis.add(pelvisBall);
 
-  // Legs: hip pivot -> thigh -> knee pivot -> shin -> foot.
+  // Legs: hip pivot -> thigh -> knee pivot -> shin -> ankle -> foot.
+  // The ankle is its own joint so the foot can roll through a step (heel
+  // strike, flat stance, toe-off) instead of staying a rigid block glued
+  // to the shin. It is the cheapest single addition that makes a walk
+  // read as weight moving over a foot rather than a pendulum.
   function makeLeg(side) {
     const hip = new THREE.Group();
     hip.position.set(0, -0.5, side * 1.7);
@@ -190,11 +194,14 @@ export function createFigure(opts = {}) {
     thigh.add(knee);
     const shin = segment(limbR * 0.88, 8, limbMat, 0);
     knee.add(shin);
+    const ankle = new THREE.Group();
+    ankle.position.y = -8;
+    shin.add(ankle);
     const foot = new THREE.Mesh(new THREE.BoxGeometry(4.8, 1.2, 2.1), limbMat);
-    foot.position.set(1.1, -8.35, 0);
-    shin.add(foot);
+    foot.position.set(1.1, -0.35, 0);
+    ankle.add(foot);
     pelvis.add(hip);
-    return { hip, knee };
+    return { hip, knee, ankle };
   }
   const legL = makeLeg(1);
   const legR = makeLeg(-1);
@@ -302,11 +309,15 @@ export function createFigure(opts = {}) {
     gun,
     armed: !!opts.armed,
     parts: { pelvis, spine, neck, legL, legR, armL, armR },
-    target: { speed: 0, crouch: 0, drive: 0, aim: 0, down: 0 },
-    cur: { speed: 0, crouch: 0, drive: 0, aim: 0, down: 0 },
+    target: { speed: 0, crouch: 0, drive: 0, aim: 0, down: 0, bank: 0, reach: 0 },
+    cur: { speed: 0, crouch: 0, drive: 0, aim: 0, down: 0, bank: 0, reach: 0 },
     phase: Math.random() * Math.PI * 2,
     swaySeed: Math.random() * 100,
     punchT: -1,
+    // Screenshot use only: hold the punch at a fixed phase (0..1) so a
+    // still frame is guaranteed to catch the strike, not an idle gap
+    // between loops. Null in normal play.
+    punchHold: null,
     punchArm: 'R',
     expr: 'neutral',
     setExpression(name) {
@@ -318,6 +329,12 @@ export function createFigure(opts = {}) {
     },
     setGun(on) {
       gun.visible = on;
+    },
+    /** Freeze the punch at phase p for a composed still (arm 'R' | 'L'). */
+    posePunch(p, arm = 'R') {
+      fig.punchArm = arm;
+      fig.punchT = 0;
+      fig.punchHold = p;
     },
     triggerPunch() {
       if (fig.punchT < 0) {
@@ -332,26 +349,33 @@ export function createFigure(opts = {}) {
   const easeOut = (t) => 1 - Math.pow(1 - t, 3);
   const easeIn = (t) => t * t * t;
 
-  /** Punch arm curves at phase p (0..1): shoulder shove, elbow bend, spine twist. */
+  /**
+   * Punch curves at phase p (0..1): shoulder shove, elbow bend, spine twist.
+   * The punch is 0.44 s long: a 0.11 s wind-up, a 0.09 s strike and a
+   * 0.24 s recovery. The strike is driven by ease-in so the fist
+   * accelerates into the extension and stops dead at the hit, while the
+   * recovery eases out — anticipation, strike, follow-through, never a
+   * constant-speed hinge.
+   */
   const punchPose = (p) => {
     if (p <= 0 || p >= 1) return { shove: 0, bend: 0, tw: 0 };
-    if (p < 0.3) {
-      const k = easeOut(p / 0.3);
-      return { shove: -0.62 * k, bend: 1.5 * k, tw: -0.38 * k };
+    if (p < 0.26) {
+      const k = easeOut(p / 0.26);
+      return { shove: -0.78 * k, bend: 1.62 * k, tw: -0.46 * k };
     }
-    if (p < 0.55) {
-      const k = easeIn((p - 0.3) / 0.25);
-      return { shove: -0.62 + 2.3 * k, bend: 1.5 - 1.44 * k, tw: -0.38 + 0.68 * k };
+    if (p < 0.46) {
+      const k = easeIn((p - 0.26) / 0.2);
+      return { shove: -0.78 + 2.62 * k, bend: 1.62 - 1.56 * k, tw: -0.46 + 0.88 * k };
     }
-    const k = easeOut((p - 0.55) / 0.45);
-    return { shove: 1.68 * (1 - k), bend: 0.06 + 0.3 * k, tw: 0.3 * (1 - k) };
+    const k = easeOut((p - 0.46) / 0.54);
+    return { shove: 1.84 * (1 - k), bend: 0.06 + 0.34 * k, tw: 0.42 * (1 - k) };
   };
   /** Normalised hip-drive curve over the punch: -1 wound back, +1 driven through. */
   const driveAt = (p) => {
     if (p <= 0 || p >= 1) return 0;
-    if (p < 0.3) return -easeOut(p / 0.3);
-    if (p < 0.55) return -1 + 2 * easeIn((p - 0.3) / 0.25);
-    return 1 - easeOut((p - 0.55) / 0.45);
+    if (p < 0.26) return -easeOut(p / 0.26);
+    if (p < 0.46) return -1 + 2 * easeIn((p - 0.26) / 0.2);
+    return 1 - easeOut((p - 0.46) / 0.54);
   };
 
   /** Solve every joint from the damped pose values. Call once per frame. */
@@ -363,66 +387,89 @@ export function createFigure(opts = {}) {
     c.drive = damp(c.drive, t.drive, 8, dt);
     c.aim = damp(c.aim, t.aim, 12, dt);
     c.down = damp(c.down, t.down, 7, dt);
+    c.bank = damp(c.bank, t.bank ?? 0, 9, dt);
+    c.reach = damp(c.reach, t.reach ?? 0, 12, dt);
 
     const speed = Math.min(1.35, c.speed);
-    if (speed > 0.03 && c.down < 0.3) fig.phase += dt * (5.4 + 6.8 * speed);
+    if (speed > 0.03 && c.down < 0.3) fig.phase += dt * (4.2 + 5.4 * speed);
     const ph = fig.phase;
     const sw = Math.sin(ph);
     const sw2 = Math.sin(ph + Math.PI);
-    const gait = Math.min(1, speed); // 0 idle .. 1 full run blend
+    const gait = Math.min(1, speed); // 0 idle .. 1 walk
+    const run = Math.max(0, Math.min(1, (speed - 0.7) / 0.6)); // 0 walk .. 1 sprint
 
-    // --- Vertical: bob from the gait, sink from crouch / seat / fall. ---
-    const bob = Math.abs(Math.sin(ph)) * 1.5 * gait;
-    const breathe = Math.sin(time * 1.7 + fig.swaySeed) * 0.22 * (1 - gait);
-    pelvis.position.y = HIP_H + bob + breathe - c.crouch * 6.5 - c.drive * 13;
+    // --- Vertical and lateral: the pelvis rises over the stance leg,
+    // dips into the next step, and sways toward whichever foot is
+    // carrying the weight. Without the sway the walk is a scissor; with
+    // it, the mass moves across the feet. ---
+    const bob = Math.abs(Math.sin(ph)) * (1.15 + 0.55 * run) * gait;
+    const breathe = Math.sin(time * 1.7 + fig.swaySeed) * 0.24 * (1 - gait);
+    pelvis.position.y = HIP_H + bob + breathe - c.crouch * 6.5 - c.drive * 14;
     pelvis.position.x = 0; // the punch block below may drive these forward/sideways
-    pelvis.position.z = 0;
-    pelvis.rotation.x = Math.sin(ph * 2 + fig.swaySeed) * 0.03 * gait; // gentle roll
-    pelvis.rotation.y = Math.sin(time * 0.43 + fig.swaySeed) * 0.05 * (1 - gait); // idle weight shift
+    pelvis.position.z = -Math.sin(ph) * 0.9 * gait * (1 - c.drive);
+    pelvis.rotation.x = Math.sin(ph * 2 + fig.swaySeed) * 0.035 * gait + c.bank * 0.12; // roll
+    pelvis.rotation.y = Math.sin(time * 0.43 + fig.swaySeed) * 0.05 * (1 - gait)
+      + Math.sin(ph) * 0.08 * gait; // idle sway / pelvis follows the leading leg
 
-    // --- Legs: swing with knee lift while the foot is in the air. ---
-    const amp = 0.62 * gait;
-    const kneeLift = (s) => Math.max(0, -Math.sin(s - 0.85)) * 0.95 * gait + 0.06 * gait;
-    legL.hip.rotation.z = sw * amp - c.crouch * 0.8 - c.drive * 1.35 + c.down * 0.15;
-    legR.hip.rotation.z = sw2 * amp - c.crouch * 0.8 - c.drive * 1.35 - c.down * 0.1;
-    legL.knee.rotation.z = -kneeLift(ph) - c.crouch * 1.65 - c.drive * 1.45;
-    legR.knee.rotation.z = -kneeLift(ph + Math.PI) - c.crouch * 1.65 - c.drive * 1.45;
+    // --- Legs: hip swing, knee lift while the foot is in the air, and an
+    // ankle roll through heel strike, flat stance and toe-off. ---
+    const amp = (0.48 + 0.26 * run) * gait;
+    const kneeLift = (s) => Math.max(0, -Math.sin(s - 0.85)) * (0.82 + 0.55 * run) * gait;
+    legL.hip.rotation.z = sw * amp + c.crouch * 0.55 + c.drive * 1.25 + c.down * 0.15;
+    legR.hip.rotation.z = sw2 * amp + c.crouch * 0.55 + c.drive * 1.25 - c.down * 0.1;
+    legL.knee.rotation.z = -kneeLift(ph) - 0.06 * gait - c.crouch * 1.75 - c.drive * 1.55;
+    legR.knee.rotation.z = -kneeLift(ph + Math.PI) - 0.06 * gait - c.crouch * 1.75 - c.drive * 1.55;
+    legL.ankle.rotation.z = Math.sin(ph) * 0.32 * gait + c.crouch * 0.5 + c.drive * 0.45 + c.down * 0.12;
+    legR.ankle.rotation.z = Math.sin(ph + Math.PI) * 0.32 * gait + c.crouch * 0.5 + c.drive * 0.45 - c.down * 0.08;
 
-    // --- Spine: lean into the movement, settle when seated, hunch when crouched. ---
-    let twist = Math.sin(ph) * 0.09 * gait;
-    spine.rotation.z = -(0.1 * gait + c.crouch * 0.34 + c.drive * 0.1 - c.down * 0.2);
-    spine.rotation.x = Math.sin(ph * 2) * 0.028 * gait;
-    neck.rotation.z = 0.06 * gait + c.crouch * -0.12; // head counter-tilt keeps the face level
+    // --- Spine: a slight forward curve into the run, a counter-twist
+    // against the pelvis, and a side sway that trails the step. ---
+    let twist = -Math.sin(ph) * 0.13 * gait;
+    spine.rotation.z = -(0.08 * gait + 0.15 * run + c.crouch * 0.34 - c.down * 0.2 - c.drive * 0.06);
+    spine.rotation.x = Math.sin(ph * 2) * 0.025 * gait + c.bank * 0.1;
+    neck.rotation.z = 0.07 * gait + c.crouch * 0.16 + c.drive * 0.05 - c.bank * 0.1;
     neck.rotation.y = Math.sin(time * 0.31 + fig.swaySeed * 2) * 0.14 * (1 - gait) * (1 - c.aim);
     chestBall.scale.y = 2.0 + Math.sin(time * 1.7 + fig.swaySeed) * 0.07 * (1 - gait); // breathing
 
-    // --- Arms: swing opposite to the legs, elbows softly bent. ---
-    let shL = sw2 * amp * 0.85;
-    let shR = sw * amp * 0.85;
-    let elL = 0.3 + Math.max(0, Math.sin(ph + Math.PI - 0.7)) * 0.35 * gait + c.crouch * 0.25;
-    let elR = 0.3 + Math.max(0, Math.sin(ph - 0.7)) * 0.35 * gait + c.crouch * 0.25;
+    // --- Arms: swing opposite the legs, elbows bending as the arm comes
+    // forward, so the forearm trails the upper arm a fraction late. ---
+    const armAmp = amp * (0.95 + 0.3 * run);
+    let shL = -sw * armAmp;
+    let shR = -sw2 * armAmp;
+    let elL = 0.3 + Math.max(0, -sw) * 0.46 * gait + c.crouch * 0.25;
+    let elR = 0.3 + Math.max(0, -sw2) * 0.46 * gait + c.crouch * 0.25;
     // Driving: both arms forward and bent onto the wheel, settled.
     shL = shL * (1 - c.drive) + 0.92 * c.drive;
     shR = shR * (1 - c.drive) + 0.92 * c.drive;
     elL = elL * (1 - c.drive) + 0.55 * c.drive;
     elR = elR * (1 - c.drive) + 0.55 * c.drive;
-    // Aiming: the gun arm points forward, the other tucks in.
+    // Aiming: the gun arm points forward, the free hand comes up to support it.
     shR = shR * (1 - c.aim) + 1.5 * c.aim;
     elR = elR * (1 - c.aim) + 0.06 * c.aim;
-    elL = elL * (1 - c.aim) + 0.7 * c.aim;
+    shL = shL * (1 - c.aim) + 1.08 * c.aim;
+    elL = elL * (1 - c.aim) + 0.62 * c.aim;
+    // Climbing in: the right hand reaches for the door handle.
+    shR = shR * (1 - c.reach) + 1.02 * c.reach;
+    elR = elR * (1 - c.reach) + 0.3 * c.reach;
     // Knocked out: arms flop.
     shL = shL * (1 - c.down) + 0.5 * c.down;
     shR = shR * (1 - c.down) - 0.4 * c.down;
 
-    // --- Punch: anticipation (wind back + twist), strike (extend +
-    // untwist), recovery — driven from the hips, not just the arm. The
-    // pelvis yaws INTO the punch (the punching-side hip drives forward),
-    // the weight shifts onto that leg with a dip and a forward drive, and
-    // the spine twist follows the pelvis a beat later (the whip), so the
-    // shoulder rides the combined rotation forward. `side` mirrors every
+    // --- Punch: anticipation (wind back + twist), strike (step in and
+    // extend), follow-through — driven from the whole body. The lead
+    // foot steps forward and plants, the rear heel turns up, the pelvis
+    // yaws INTO the punch, the root lunges 7 units through the hit, and
+    // the spine twist follows a beat later (the whip). This is the
+    // difference between a punch and a raised arm. `side` mirrors every
     // term for left and right punches. ---
+    let rootX = 0;
+    let rootDip = 0;
     if (fig.punchT >= 0) {
-      fig.punchT += dt / 0.38;
+      if (fig.punchHold !== null) {
+        fig.punchT = fig.punchHold;
+      } else {
+        fig.punchT += dt / 0.44;
+      }
       const pt = fig.punchT;
       if (pt >= 1) {
         fig.punchT = -1;
@@ -441,16 +488,25 @@ export function createFigure(opts = {}) {
         const hd = driveAt(pt);
         const strike = Math.max(0, hd);
         const load = Math.max(0, -hd);
-        pelvis.rotation.y += side * 0.44 * hd;
-        pelvis.position.z += side * 1.0 * hd; // weight onto the punching-side leg
-        pelvis.position.x += 1.5 * strike; // root drives forward through the hit
-        pelvis.position.y -= 1.3 * strike + 0.5 * load; // dip: front knee bends, rear loads
-        spine.rotation.z -= 0.1 * strike; // torso leans into the strike
-        const frontLeg = side > 0 ? legL : legR;
-        const rearLeg = side > 0 ? legR : legL;
-        frontLeg.knee.rotation.z -= 0.34 * strike;
-        frontLeg.hip.rotation.z += 0.12 * strike;
-        rearLeg.hip.rotation.z -= 0.1 * strike;
+        pelvis.rotation.y += side * 0.5 * hd;
+        pelvis.position.z += side * 1.1 * hd; // weight onto the punching-side leg
+        pelvis.position.x += 1.0 * strike; // upper body drives forward
+        pelvis.position.y -= 1.2 * strike + 0.55 * load; // dip: front knee bends, rear loads
+        // The root lunge: back on the wind-up, 7 units forward at impact.
+        rootX = strike * 7.4 - load * 2.3;
+        rootDip = strike * 1.0 + load * 0.55;
+        spine.rotation.z -= 0.12 * strike; // torso leans into the strike
+        spine.rotation.x -= side * 0.05 * strike;
+        // A right cross steps off the left foot; a left hook off the right.
+        const lead = arm === 'R' ? legL : legR;
+        const rear = arm === 'R' ? legR : legL;
+        lead.hip.rotation.z += 0.62 * strike + 0.1 * load; // step in and plant
+        lead.knee.rotation.z -= 0.5 * load + 0.18 * strike;
+        lead.ankle.rotation.z += 0.25 * strike;
+        rear.hip.rotation.z -= 0.3 * strike;
+        rear.knee.rotation.z += 0.08 * strike;
+        rear.ankle.rotation.z -= 0.45 * strike; // rear heel up, toe planted
+        neck.rotation.y -= side * 0.1 * strike; // eyes stay on the target
       }
     }
     spine.rotation.y = twist;
@@ -463,14 +519,18 @@ export function createFigure(opts = {}) {
     // clears the torso, chest and pelvis instead of sitting inside their
     // silhouette. (For a hanging arm, rotation.x of -side tips the tip
     // away from the midline; the old +-0.1 did the opposite and tilted
-    // both arms INTO the body.) Knocked out, they flop further out.
+    // both arms INTO the body.) Knocked out, they flop further out; while
+    // reaching for a door the gun arm tucks in toward the handle.
     armL.shoulder.rotation.x = -armL.side * (0.17 + c.down * 0.5);
-    armR.shoulder.rotation.x = -armR.side * (0.17 + c.down * 0.5);
+    armR.shoulder.rotation.x = -armR.side * (0.17 + c.down * 0.5 - c.reach * 0.12);
 
-    // --- Whole-body fall when knocked out. ---
-    tilt.rotation.x = -1.5 * easeOut(Math.min(1, c.down));
-    // Seated drivers also sink at the root, so the head stays inside the cabin.
-    tilt.position.y = -2 * c.down - 5 * c.drive;
+    // --- Whole-body fall when knocked out; a lean into a hard turn
+    // while moving (the bank the player feels when changing direction). ---
+    tilt.rotation.x = c.bank * 0.28 - 1.5 * easeOut(Math.min(1, c.down));
+    // Seated drivers sink at the root, and the seat pose sinks a little
+    // further than before, so the head stays inside the cabin.
+    tilt.position.y = -2 * c.down - 5.2 * c.drive - rootDip;
+    tilt.position.x = rootX;
     shadow.material.opacity = 0.2 * (1 - c.drive);
   }
 

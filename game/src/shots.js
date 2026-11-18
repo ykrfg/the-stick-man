@@ -1,14 +1,15 @@
 // Deterministic screenshot scenes, selected with ?shot=<name>&seed=1. Each scene
 // composes the world the judge should see — a police chase for the cover, a busy
 // street, a mission marker, a fistfight — then freezes movement while the figures
-// keep posing (mid-stride gaits, a looping punch), so a still frame still reads
-// as alive. Movement systems do not run in shot mode; only poses, markers and
-// police lights advance.
+// keep posing (mid-stride gaits, a punch held at the strike), so a still frame
+// still reads as alive. Movement systems do not run in shot mode; only poses,
+// markers and police lights advance.
 import { HEAT_THRESHOLDS } from './config.js';
 import { resolveCircleCollision } from './city.js';
 import { spawnPed, syncFigure } from './people.js';
 import { spawnCar, spawnPoliceCar, syncCarMesh, updatePoliceLights } from './vehicles.js';
 import { starsFor } from './police.js';
+import { spawnImpact } from './combat.js';
 
 /** Spawn a bystander for a scene, pushed out of any building it landed inside. */
 function spawnShotPed(g, opts) {
@@ -118,19 +119,27 @@ export function setupShot(g, name) {
       look: { x: door.x - 35, y: 22, z: door.y + 8 },
     };
   } else if (name === 'fight') {
-    // A fistfight on the open intersection: the hero mid-punch, two black rivals.
+    // A fistfight on the open intersection: the hero's cross landing at
+    // full extension, a rival caught in its own wind-up, another rival
+    // closing in. The hero is posed with posePunch: the fight used to
+    // loop a real punch on a timer, and a capture could land in the
+    // idle gap between swings — the one still in the dossier showed two
+    // men standing still. The phase is frozen at the strike (46% of the
+    // 0.44 s punch), so the frame is always the frame of impact.
     clearArea(g, 1590, 1155, 340);
     p.x = 1568;
     p.y = 1150;
-    p.angle = 0.1;
+    p.angle = 0.22; // squared up on the rival, not at empty road
     p.speedNow = 0;
     p.fig.setExpression('angry');
-    const rival = spawnPed(g, { role: 'rival', x: 1622, y: 1158, name: 'COLLECTOR' });
+    p.fig.posePunch(0.46, 'R');
+    const rival = spawnPed(g, { role: 'rival', x: 1586, y: 1157, name: 'COLLECTOR' });
     rival.angle = Math.PI - 0.08;
     rival.speedNow = 0;
     rival.fig.setExpression('angry');
-    const rival2 = spawnPed(g, { role: 'rival', x: 1500, y: 1205, name: 'COLLECTOR' });
-    rival2.angle = 0.8;
+    rival.fig.posePunch(0.16, 'L'); // cocked, a beat from throwing
+    const rival2 = spawnPed(g, { role: 'rival', x: 1610, y: 1180, name: 'COLLECTOR' });
+    rival2.angle = Math.atan2(1150 - 1180, 1568 - 1610);
     rival2.speedNow = 150;
     rival2.fig.setExpression('angry');
     // Frame it as Bruno's collection job so the HUD tells the same story, and
@@ -140,17 +149,21 @@ export function setupShot(g, name) {
     g.mission.phase = 'fight';
     g.mission.shopStep = 0;
     g.mission.rivals = [rival, rival2];
-    g.fightShot = { rival, punchT: 0 };
-    // Three-quarter front view from down the avenue: both fighters' faces and the
-    // punching arm stay visible, nothing built blocks the intersection.
+    // The burst of the hit, frozen: spawnImpact is only ever advanced by the
+    // live combat loop, so in a still it stays at its first frame. It sits
+    // just short of the rival's jaw, facing back down the punch.
+    spawnImpact(g, 1593, 1158, p.angle, 27.5);
+    // A side-on 3/4 of the exchange, from just off the fighters' front line:
+    // the hero reads left of frame, the rival right, and the punch crosses
+    // between them instead of the camera looking down the hero's shoulder.
     g.fixedCam = {
-      pos: { x: 1648, y: 62, z: 1252 },
-      look: { x: 1585, y: 20, z: 1152 },
+      pos: { x: 1630, y: 44, z: 1100 },
+      look: { x: 1588, y: 22, z: 1155 },
     };
   }
 }
 
-/** Advance only the posing in shot mode: gaits in place, markers, lights, punches. */
+/** Advance only the posing in shot mode: gaits in place, markers, lights. */
 export function tickShot(g, dt) {
   const p = g.player;
   if (g.shotMode === 'cover') {
@@ -177,14 +190,6 @@ export function tickShot(g, dt) {
       syncFigure(ped, dt, g.time);
     } else if (g.shotMode !== 'cover' || Math.hypot(ped.x - p.x, ped.y - p.y) < 700) {
       syncFigure(ped, dt, g.time);
-    }
-  }
-  if (g.shotMode === 'fight' && g.fightShot) {
-    g.fightShot.punchT -= dt;
-    if (g.fightShot.punchT <= 0) {
-      g.fightShot.punchT = 0.85;
-      p.fig.triggerPunch();
-      g.fightShot.rival.fig.triggerPunch();
     }
   }
   if (g.markerGold.visible) g.markerGold.userData.update(g.time);

@@ -3,11 +3,12 @@
 // (streets, the player, police, rivals and the mission marker), plus the title,
 // pause, busted and wasted screens. The title screen draws two little stick
 // figures in canvas lines — the white hero and the black rival — as a logo.
-import { HEAT_THRESHOLDS, PLAYER, ROAD, WORLD } from './config.js';
+import { HEAT_THRESHOLDS, CAR, PLAYER, ROAD, WORLD } from './config.js';
 import { jobAvailable, missionAvailable, objectiveTarget, objectiveText } from './missions.js';
 import { hasProgress } from './save.js';
 import { starsFor } from './police.js';
 import { PROMPT_PREFIX, t } from './i18n.js';
+import * as THREE from 'three';
 
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
@@ -118,6 +119,29 @@ function drawMinimap(g, ctx) {
     ctx.fillStyle = color;
     ctx.fill();
   };
+  // Landmark icons: the services a player navigates to by name. Glyphs,
+  // not labels, so they read in both languages and at both map sizes.
+  const lm = g.city.landmarks;
+  if (lm.hospital) {
+    const hx = x0 + lm.hospital.x * sx;
+    const hy = y0 + lm.hospital.y * sy;
+    ctx.fillStyle = '#ff6b5e';
+    ctx.fillRect(hx - 4, hy - 1.4, 8, 2.8);
+    ctx.fillRect(hx - 1.4, hy - 4, 2.8, 8);
+  }
+  if (lm.spray) {
+    const px = x0 + lm.spray.x * sx;
+    const py = y0 + lm.spray.y * sy;
+    ctx.fillStyle = '#5ad1e8';
+    ctx.fillRect(px - 3.2, py - 3.2, 6.4, 6.4);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(10,14,20,0.8)';
+    ctx.strokeRect(px - 3.2, py - 3.2, 6.4, 6.4);
+  }
+  if (lm.pd) {
+    dot(lm.pd.x, lm.pd.y, 3.4, '#5aa2ff');
+    dot(lm.pd.x, lm.pd.y, 1.4, '#ffffff');
+  }
   // Bruno, when he has work (a story job, or odd jobs in free roam).
   if (!g.mission.active && (missionAvailable(g) || jobAvailable(g))) {
     const b = g.city.landmarks.diner;
@@ -373,6 +397,89 @@ function drawTrafficWarnings(g, ctx) {
   }
 }
 
+/**
+ * The objective arrow: when the current objective has a place and that
+ * place is off-screen, a gold chevron sits on the screen edge in its
+ * direction and pulses. It shares the traffic warnings' edge maths but
+ * its own corner insets keep it clear of the money/HUD rows at the top
+ * and the prompt at the bottom. Never drawn in ?shot= scenes, so the
+ * official stills stay composed.
+ */
+function drawObjectiveChevron(g, ctx, target) {
+  if (!target || g.shotMode || g.state !== 'play') return;
+  const cam = g.camera;
+  cam.updateMatrixWorld();
+  cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+  const e = cam.matrixWorld.elements;
+  const dx = target.x - cam.position.x;
+  const dy = 18 - cam.position.y;
+  const dz = target.y - cam.position.z;
+  let rx = dx * e[0] + dy * e[1] + dz * e[2];
+  let uy = dx * e[4] + dy * e[5] + dz * e[6];
+  const fz = -(dx * e[8] + dy * e[9] + dz * e[10]);
+  const v = new THREE.Vector3(target.x, 18, target.y).project(cam);
+  // In front of the camera and inside the safe frame: nothing to show.
+  if (fz > 1 && Math.abs(v.x) < 0.88 && Math.abs(v.y) < 0.8) return;
+  if (fz < 1) { rx = -rx; uy = -uy; } // behind: the edge it is really off
+  const len = Math.hypot(rx, uy) || 1;
+  const dirX = rx / len;
+  const dirY = -uy / len; // screen y runs down, camera up runs up
+  const { viewW: w, viewH: h } = g;
+  const cx = w / 2;
+  const cy = h / 2;
+  const hx = Math.max(40, cx - (g.mobile ? 42 : 56));
+  const hy = Math.max(40, cy - (g.mobile ? 120 : 92));
+  const tx = Math.abs(dirX) > 1e-6 ? hx / Math.abs(dirX) : Infinity;
+  const ty = Math.abs(dirY) > 1e-6 ? hy / Math.abs(dirY) : Infinity;
+  const tEdge = Math.min(tx, ty);
+  ctx.save();
+  ctx.translate(cx + dirX * tEdge, cy + dirY * tEdge);
+  ctx.rotate(Math.atan2(dirY, dirX));
+  ctx.globalAlpha = 0.72 + Math.sin(g.time * 4) * 0.18;
+  ctx.beginPath();
+  ctx.moveTo(14, 0);
+  ctx.lineTo(-8, 10);
+  ctx.lineTo(-8, -10);
+  ctx.closePath();
+  ctx.fillStyle = '#ffd94d';
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = 'rgba(12,16,26,0.8)';
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** The player's speed, bottom-right, while he is driving (desktop only). */
+function drawSpeedometer(g, ctx) {
+  const p = g.player;
+  if (g.mobile || p.state !== 'car' || !p.car) return;
+  const speed = Math.abs(p.car.speed);
+  const frac = Math.min(1, speed / CAR.maxSpeed);
+  const w = 178;
+  const h = 74;
+  const x = g.viewW - w - 22;
+  const y = g.viewH - h - 22;
+  ctx.save();
+  roundRect(ctx, x, y, w, h, 12);
+  ctx.fillStyle = 'rgba(12,16,26,0.72)';
+  ctx.fill();
+  ctx.textAlign = 'left';
+  ctx.font = '900 38px system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(String(Math.round(speed * 0.5)), x + 18, y + 46);
+  ctx.font = '700 13px system-ui, sans-serif';
+  ctx.fillStyle = '#ffd94d';
+  ctx.fillText(t('hud.speedUnit'), x + 116, y + 44);
+  roundRect(ctx, x + 18, y + 56, w - 36, 9, 4);
+  ctx.fillStyle = 'rgba(255,255,255,0.16)';
+  ctx.fill();
+  roundRect(ctx, x + 18, y + 56, (w - 36) * frac, 9, 4);
+  ctx.fillStyle = frac > 0.82 ? '#ff8a5c' : '#ffd94d';
+  ctx.fill();
+  ctx.restore();
+  ctx.textAlign = 'left';
+}
+
 /** Draw everything for the current frame. */
 export function drawHUD(g) {
   const ctx = g.hudCtx;
@@ -576,7 +683,11 @@ export function drawHUD(g) {
 
   drawMinimap(g, ctx);
 
+  drawObjectiveChevron(g, ctx, target);
+
   drawTrafficWarnings(g, ctx);
+
+  drawSpeedometer(g, ctx);
 
   if (g.state === 'paused') {
     ctx.fillStyle = 'rgba(10,12,20,0.6)';
