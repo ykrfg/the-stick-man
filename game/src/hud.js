@@ -4,7 +4,8 @@
 // pause, busted and wasted screens. The title screen draws two little stick
 // figures in canvas lines — the white hero and the black rival — as a logo.
 import { HEAT_THRESHOLDS, PLAYER, ROAD, WORLD } from './config.js';
-import { objectiveText } from './missions.js';
+import { objectiveTarget, objectiveText } from './missions.js';
+import { hasProgress } from './save.js';
 import { starsFor } from './police.js';
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -196,6 +197,16 @@ function drawTitleMobile(g, ctx) {
     ctx.fillStyle = '#7dff8a';
     ctx.fillText(`Saved run — $${save.money} · ${jobsDone} job(s) done`, cx, 306 + lines.length * 27 + 14);
   }
+  if (hasProgress(save)) {
+    ctx.font = '500 12.5px system-ui, sans-serif';
+    if (g.resetArm?.armed) {
+      ctx.fillStyle = '#ff8a7a';
+      ctx.fillText('Tap RESET PROGRESS again to confirm!', cx, 306 + lines.length * 27 + 42);
+    } else {
+      ctx.fillStyle = '#8b93a5';
+      ctx.fillText('RESET PROGRESS (bottom-left) starts over', cx, 306 + lines.length * 27 + 42);
+    }
+  }
   ctx.font = '500 12px system-ui, sans-serif';
   ctx.fillStyle = '#aab3c5';
   ctx.fillText('An original stick-figure game.', cx, h - 22);
@@ -241,6 +252,16 @@ function drawTitle(g, ctx) {
     ctx.fillText(`CONTINUE — $${save.money} · ${jobsDone} job(s) done — press ENTER`, cx, 356 + lines.length * 30 + 26);
   } else {
     ctx.fillText('Press ENTER to start', cx, 356 + lines.length * 30 + 26);
+  }
+  if (hasProgress(save)) {
+    ctx.font = '600 16px system-ui, sans-serif';
+    if (g.resetArm?.armed) {
+      ctx.fillStyle = '#ff8a7a';
+      ctx.fillText('Press R again to CONFIRM reset — your save will be wiped!', cx, 356 + lines.length * 30 + 58);
+    } else {
+      ctx.fillStyle = '#8b93a5';
+      ctx.fillText('R — reset progress', cx, 356 + lines.length * 30 + 58);
+    }
   }
   ctx.font = '500 15px system-ui, sans-serif';
   ctx.fillStyle = '#aab3c5';
@@ -365,8 +386,15 @@ export function drawHUD(g) {
     ctx.fill();
   }
 
-  // Objective, top-center (shrinks to fit narrow phone screens).
-  const objective = objectiveText(g);
+  // Objective, top-center (shrinks to fit narrow phone screens). When the
+  // step has a place, a distance readout rides along ("… — 120m", 10 world
+  // units to the metre) so the player can tell near from far at a glance.
+  let objective = objectiveText(g);
+  const target = objective ? objectiveTarget(g) : null;
+  if (objective && target) {
+    const dist = Math.hypot(g.player.x - target.x, g.player.y - target.y);
+    objective = `${objective} — ${Math.round(dist / 10)}m`;
+  }
   if (objective) {
     // Phones: below the money/stars row, and narrower than the screen so the
     // banner never slides under the pause button at the top-right.
@@ -470,6 +498,22 @@ export function drawHUD(g) {
       g.mobile ? 'Tap RESUME to keep playing' : 'P to resume · E enter car · F punch · K shoot · M mute',
       w / 2, h / 2 + 26,
     );
+    if (hasProgress(g.saveData)) {
+      ctx.font = `600 ${g.mobile ? 13 : 16}px system-ui, sans-serif`;
+      if (g.resetArm?.armed) {
+        ctx.fillStyle = '#ff8a7a';
+        ctx.fillText(
+          g.mobile ? 'Tap RESET PROGRESS again to CONFIRM — save will be wiped!' : 'Press R again to CONFIRM reset — your save will be wiped!',
+          w / 2, h / 2 + 58,
+        );
+      } else {
+        ctx.fillStyle = '#8b93a5';
+        ctx.fillText(
+          g.mobile ? 'RESET PROGRESS (bottom-left) wipes your save' : 'R — reset progress',
+          w / 2, h / 2 + 58,
+        );
+      }
+    }
     ctx.textAlign = 'left';
   }
 }

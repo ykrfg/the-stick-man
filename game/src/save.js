@@ -30,6 +30,16 @@ export function storeSave(data) {
   }
 }
 
+/** True when a save object holds anything worth continuing (or wiping). */
+export function hasProgress(data) {
+  return !!data && (
+    data.money > 0
+    || (Array.isArray(data.missionsDone) && data.missionsDone.length > 0)
+    || data.hasPistol === true
+    || data.earned > 0
+  );
+}
+
 /** Forget all progress (the title screen's New Game). */
 export function clearSave() {
   try {

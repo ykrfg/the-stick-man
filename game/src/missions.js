@@ -66,23 +66,57 @@ export function acceptMission(g) {
   g.events.push({ type: 'missionstart' });
 }
 
-/** The current objective line for the HUD ('' when nothing is running). */
+/**
+ * The current objective line for the HUD ('' when nothing is running). Every
+ * step names its PLACE as well as its person — "come back for Shade" alone
+ * left players asking who Shade is and where "back" is.
+ */
 export function objectiveText(g) {
   const m = g.mission;
   if (!m.active) {
     if (m.index >= MISSION_TITLES.length) return 'Free roam — Palmera is yours.';
-    return 'Talk to Bruno at the diner (E) for work.';
+    return "Talk to Bruno at Bruno's Diner (E) for work.";
   }
+  const shop = g.city.shops[m.shopStep];
+  const shopName = shop ? shop.name : 'the shop';
   switch (m.phase) {
     case 'toWarehouse': return 'Pick up the package at the Pier Warehouse.';
     case 'returnDiner': return "Bring the package back to Bruno's Diner.";
     case 'toClub': return 'Head to Club Neon and find Shade.';
-    case 'getCar': return 'Get a car and come back for Shade.';
+    case 'getCar': return 'Get a car and come back for Shade at Club Neon.';
     case 'escape': return 'LOSE THE HEAT! Get the stars off your back.';
     case 'dropoff': return 'Drop Shade at the Pier Warehouse.';
-    case 'toShop': return `Visit the shop that owes Bruno. (${m.shopStep + 1}/3)`;
-    case 'fight': return 'Beat the collectors!';
+    case 'toShop': return `Collect at ${shopName} — it owes Bruno. (${m.shopStep + 1}/3)`;
+    case 'fight': return `Beat the collectors at ${shopName}!`;
     default: return '';
+  }
+}
+
+/**
+ * The world point the current objective points at — the spot the gold/red
+ * marker stands on — or null when the step has no place (the escape: the
+ * target there is the heat itself). The HUD reads this for its distance
+ * readout, so the text, the marker, the minimap blip and the distance all
+ * agree by construction.
+ */
+export function objectiveTarget(g) {
+  const m = g.mission;
+  const L = g.city.landmarks;
+  if (!m.active) {
+    return missionAvailable(g) ? { x: L.diner.x, y: L.diner.y } : null;
+  }
+  switch (m.phase) {
+    case 'toWarehouse': return { x: L.pier.x, y: L.pier.y };
+    case 'returnDiner': return { x: L.diner.x, y: L.diner.y };
+    case 'toClub': return { x: L.club.x, y: L.club.y };
+    case 'getCar': return m.shade ? { x: m.shade.x, y: m.shade.y } : { x: L.club.x, y: L.club.y };
+    case 'dropoff': return { x: L.pier.x, y: L.pier.y };
+    case 'toShop':
+    case 'fight': {
+      const shop = g.city.shops[m.shopStep];
+      return shop ? { x: shop.x, y: shop.y } : null;
+    }
+    default: return null;
   }
 }
 
@@ -164,11 +198,19 @@ export function updateMissions(g, dt, time) {
       if (near(L.club.x, L.club.y, 52) && p.state === 'foot') {
         m.shade = spawnPed(g, { role: 'shade', x: L.club.x + 24, y: L.club.y + 10, name: 'SHADE' });
         m.shade.fig.setExpression('angry');
+        // Shade waits at the club door (like Bruno at the diner) instead of
+        // wandering the sidewalk graph — "come back for Shade" needs him
+        // findable in exactly one place.
+        m.shade.state = 'idle';
         m.phase = 'getCar';
-        g.say('SHADE', '"...Took you long enough. Get us a car. Any car."', 4);
+        g.say('SHADE', 'Bruno\'s getaway driver, one step ahead of the law. "Get us a car. Any car."', 4.5);
       }
     } else if (m.phase === 'getCar') {
-      hideMarkers(g);
+      // The marker (and with it the minimap blip) stands on Shade himself:
+      // he IS the destination of this step.
+      if (m.shade) setMarker(g, g.markerGold, m.shade.x, m.shade.y);
+      else setMarker(g, g.markerGold, L.club.x, L.club.y);
+      g.markerRed.visible = false;
       if (m.shade && p.state === 'car' && p.car) {
         const d = Math.hypot(m.shade.x - p.car.x, m.shade.y - p.car.y);
         if (d < 175 && m.shade.state !== 'board') m.shade.state = 'board';

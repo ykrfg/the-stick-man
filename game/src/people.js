@@ -6,6 +6,7 @@
 import { PLAYER, ROAD, WORLD } from './config.js';
 import { clampToWorld, resolveCircleCollision } from './city.js';
 import { createFigure } from './stick3d.js';
+import { makeTextSprite } from './world3d.js';
 
 const SIDEWALK_OFFSET = 71;
 
@@ -63,6 +64,17 @@ export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex
     exprT: 0,
     baseExpr: role === 'ped' ? 'neutral' : 'angry',
   };
+  // Mission-critical people (anyone spawned with a name: Bruno, Shade) carry
+  // a floating name label, shown while the player is near — a black stick
+  // figure is otherwise indistinguishable from every other black stick
+  // figure, which is how "come back for Shade" lost its meaning.
+  if (name) {
+    const label = makeTextSprite(name, { size: 40, color: '#ffd94d', scale: 0.6 });
+    label.position.set(0, 47, 0);
+    label.visible = false;
+    fig.group.add(label);
+    ped.label = label;
+  }
   fig.group.position.set(x, 0, y);
   g.peds.push(ped);
   g.scene.add(fig.group);
@@ -274,6 +286,11 @@ export function updatePeds(g, dt, time) {
     if (ped.exprT > 0) {
       ped.exprT -= dt;
       if (ped.exprT <= 0) ped.fig.setExpression(ped.baseExpr);
+    }
+    // Name labels (Bruno, Shade) fade in only at conversational range.
+    if (ped.label) {
+      ped.label.visible = ped.state !== 'inCar'
+        && Math.hypot(ped.x - p.x, ped.y - p.y) < 320;
     }
     switch (ped.state) {
       case 'down': {
