@@ -103,6 +103,7 @@ g.player = {
   x: dinerDoor.x - 62,
   y: dinerDoor.y + 34,
   angle: Math.PI / 2,
+  moveAngle: Math.PI / 2,
   hp: PLAYER.maxHp,
   state: 'foot',
   car: null,
@@ -491,6 +492,67 @@ function rayBuildingT(ox, oy, oz, dx, dy, dz, maxT) {
   return best;
 }
 
+/** Seat the free camera behind the hero (entering play, or respawning). */
+function seatCamera() {
+  const p = g.player;
+  const cam = g.cam;
+  const inCar = p.state === 'car' && !!p.car;
+  const facing = inCar ? p.car.angle : p.angle;
+  cam.yaw = facing + Math.PI;
+  cam.dist = ZOOM_STEPS[cam.zoomIdx] * (inCar ? 1.2 : 1);
+  cam.collDist = cam.dist;
+  cam.backBlend = 0;
+  cam.init = true;
+  const cp0 = Math.cos(cam.pitch);
+  camPos.set(
+    p.x + Math.cos(cam.yaw) * cp0 * cam.dist,
+    18 + Math.sin(cam.pitch) * cam.dist,
+    p.y + Math.sin(cam.yaw) * cp0 * cam.dist,
+  );
+}
+
+/**
+ * Settle the free camera's control state for this frame — manual orbit,
+ * zoom steps, look-back blend and the GTA auto-align — BEFORE the world
+ * updates, so on-foot movement (people.js) reads the exact yaw the camera
+ * will render with this frame (g.cam.yaw + PI * g.cam.backBlend) and
+ * stays camera-relative. Positioning happens later in updateCamera.
+ */
+function updateCameraControl(dt) {
+  const p = g.player;
+  const cam = g.cam;
+  const inCar = p.state === 'car' && !!p.car;
+
+  if (!cam.init) seatCamera();
+
+  // Manual orbit: right/middle mouse drag on desktop, free-area drag on
+  // touch — both arrive as input.orbit pixel deltas.
+  const orb = g.input.orbit;
+  if (orb.dx !== 0 || orb.dy !== 0) {
+    cam.yaw += orb.dx * 0.0052;
+    cam.pitch = Math.max(0.05, Math.min(1.3, cam.pitch + orb.dy * 0.0052));
+    cam.manualT = 0;
+  } else {
+    cam.manualT += dt;
+  }
+  if (g.input.wheelSteps !== 0) {
+    cam.zoomIdx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, cam.zoomIdx + g.input.wheelSteps));
+  }
+  // Auto-align: while the hero moves and the user is not orbiting, ease
+  // back behind the direction he is actually travelling (his moveAngle —
+  // which the camera-relative movement derives from this very yaw, so the
+  // on-screen direction of travel holds steady while the camera eases).
+  const lookBack = g.input.down('KeyQ') || g.input.middleDown;
+  cam.lookBack = lookBack;
+  const moving = inCar ? Math.abs(p.car.speed) > 45 : p.speedNow > 40;
+  if (moving && cam.manualT > 1.1 && !lookBack) {
+    const behind = inCar ? p.car.angle : (p.moveAngle ?? p.angle);
+    const rate = inCar ? 2.4 : 1.7;
+    cam.yaw += angleArc(cam.yaw, behind + Math.PI) * (1 - Math.exp(-rate * dt));
+  }
+  cam.backBlend += ((lookBack ? 1 : 0) - cam.backBlend) * (1 - Math.exp(-16 * dt));
+}
+
 function updateCamera(dt) {
   const p = g.player;
   if (g.fixedCam) {
@@ -522,46 +584,11 @@ function updateCamera(dt) {
   const speedFrac = inCar ? Math.min(1, Math.abs(p.car.speed) / CAR.maxSpeed) : 0;
   const anchor = { x: p.x, y: 18, z: p.y };
 
-  if (!cam.init) {
-    // Entering play (or respawning across the city): start behind the hero.
-    cam.yaw = facing + Math.PI;
-    cam.dist = ZOOM_STEPS[cam.zoomIdx] * (inCar ? 1.2 : 1);
-    cam.collDist = cam.dist;
-    cam.backBlend = 0;
-    cam.init = true;
-    const cp0 = Math.cos(cam.pitch);
-    camPos.set(
-      anchor.x + Math.cos(cam.yaw) * cp0 * cam.dist,
-      anchor.y + Math.sin(cam.pitch) * cam.dist,
-      anchor.z + Math.sin(cam.yaw) * cp0 * cam.dist,
-    );
-  }
-
-  if (g.state === 'play') {
-    // Manual orbit: right/middle mouse drag on desktop, free-area drag on
-    // touch — both arrive as input.orbit pixel deltas.
-    const orb = g.input.orbit;
-    if (orb.dx !== 0 || orb.dy !== 0) {
-      cam.yaw += orb.dx * 0.0052;
-      cam.pitch = Math.max(0.05, Math.min(1.3, cam.pitch + orb.dy * 0.0052));
-      cam.manualT = 0;
-    } else {
-      cam.manualT += dt;
-    }
-    if (g.input.wheelSteps !== 0) {
-      cam.zoomIdx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, cam.zoomIdx + g.input.wheelSteps));
-    }
-    // Auto-align: while the hero moves and the user is not orbiting, ease
-    // back behind the direction of travel, like GTA.
-    const lookBack = g.input.down('KeyQ') || g.input.middleDown;
-    cam.lookBack = lookBack;
-    const moving = inCar ? Math.abs(p.car.speed) > 45 : p.speedNow > 40;
-    if (moving && cam.manualT > 1.1 && !lookBack) {
-      const rate = inCar ? 2.4 : 1.7;
-      cam.yaw += angleArc(cam.yaw, facing + Math.PI) * (1 - Math.exp(-rate * dt));
-    }
-    cam.backBlend += ((lookBack ? 1 : 0) - cam.backBlend) * (1 - Math.exp(-16 * dt));
-  }
+  // Control state (yaw, pitch, zoom, look-back, auto-align) was settled
+  // earlier in the frame by updateCameraControl; this only positions the
+  // camera. Seat defensively for paths that arrive here without a control
+  // step (the title -> play transition frame).
+  if (!cam.init) seatCamera();
 
   // Distance: zoom step, more room in a car, a small lift with speed.
   const distTarget = ZOOM_STEPS[cam.zoomIdx] * (inCar ? 1.2 : 1) * (1 + 0.22 * speedFrac);
@@ -699,6 +726,8 @@ function frame(now) {
     if (input.tapped('KeyP')) {
       g.state = 'paused';
     } else {
+      // Camera control first: movement below reads the yaw settled here.
+      updateCameraControl(dt);
       const p = g.player;
       // Car enter/exit transition: a crouched scramble to the door.
       if (g.transition) {

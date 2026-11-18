@@ -149,14 +149,36 @@ export function seatDriverFigure(g, dt, time) {
   p.fig.update(dt, time);
 }
 
-/** The player's legs: WASD/arrows, Shift to sprint, smooth facing, building collisions. */
+/** Shortest signed arc from angle a to angle b, in (-PI, PI]. */
+function angleArc(a, b) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+/**
+ * The player's legs: WASD/arrows or the touch stick, Shift to sprint,
+ * building collisions. Movement is CAMERA-RELATIVE (GTA-style): the input
+ * axes are screen-space intent (x = screen right, y = screen down), rotated
+ * by the yaw the camera renders with this frame — g.cam.yaw plus the
+ * look-back flip — which main.js settles in its camera-control step before
+ * this runs. Screen-right in world terms is (sin yaw, -cos yaw) and
+ * screen-down is (cos yaw, sin yaw); combining the two gives the world
+ * move vector below, so "up" always runs away from the camera the player
+ * is actually looking through, however it has orbited or is still easing
+ * into its auto-align.
+ */
 export function updatePlayerOnFoot(g, dt) {
   const p = g.player;
   const axes = g.input.axes();
   const sprint = g.input.down('ShiftLeft', 'ShiftRight');
   const speed = sprint ? PLAYER.sprintSpeed : PLAYER.walkSpeed;
-  let mx = axes.x;
-  let my = axes.y;
+  const yaw = g.cam.yaw + Math.PI * g.cam.backBlend;
+  const sin = Math.sin(yaw);
+  const cos = Math.cos(yaw);
+  let mx = axes.x * sin + axes.y * cos;
+  let my = -axes.x * cos + axes.y * sin;
   const len = Math.hypot(mx, my);
   if (len > 0) {
     // Analog stick magnitude scales the pace (a light push walks slowly);
@@ -166,7 +188,11 @@ export function updatePlayerOnFoot(g, dt) {
     my /= len;
     p.x += mx * speed * mag * dt;
     p.y += my * speed * mag * dt;
-    p.angle = Math.atan2(my, mx);
+    // The direction actually travelled this frame: the camera's auto-align
+    // keys off this, never off the eased facing below.
+    p.moveAngle = Math.atan2(my, mx);
+    // Facing eases toward the travel direction; it never steers movement.
+    p.angle += angleArc(p.angle, p.moveAngle) * (1 - Math.exp(-14 * dt));
     p.speedNow = speed * mag;
   } else {
     p.speedNow = 0;
