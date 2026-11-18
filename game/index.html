@@ -40,6 +40,15 @@
   #tapBtn { position: fixed; left: 50%; bottom: 16%; transform: translateX(-50%); z-index: 7;
     padding: 17px 36px; border-radius: 999px; border: 3px solid #17181c;
     background: #ffd94d; color: #17181c; font: 800 23px system-ui, sans-serif; white-space: nowrap; }
+  /* Progress reset (title / pause, both platforms): main.js owns its
+     visibility and label — hidden unless a save exists. Two-step: the first
+     press arms it (red), the second wipes. Bottom-left is clear of the
+     centred title text, the footer line and every touch control. */
+  #btnReset { position: fixed; left: 14px; bottom: 14px; z-index: 8; display: none;
+    padding: 10px 16px; border-radius: 999px; border: 2px solid rgba(255,110,90,0.75);
+    background: rgba(24,12,14,0.72); color: #ff9a86; font: 700 13px system-ui, sans-serif;
+    white-space: nowrap; cursor: pointer; touch-action: none; -webkit-user-select: none; user-select: none; }
+  #btnReset.armed { background: #c93a2c; border-color: #17181c; color: #ffffff; }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.min.js" } }
@@ -60,6 +69,7 @@
   <button id="btnPause" type="button">| |</button>
   <button id="tapBtn" type="button">TAP TO START</button>
 </div>
+<button id="btnReset" type="button">RESET PROGRESS</button>
 <p id="status" role="status" aria-live="polite"></p>
 <script type="module" src="./src/main.js"></script>
 </body>

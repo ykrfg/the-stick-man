@@ -9,7 +9,7 @@ import { CAR, HEAT_FOR, PLAYER, SPRAY_PER_STAR } from './config.js';
 import { makeRng } from './random.js';
 import { Input } from './input.js';
 import { SoundFX } from './audio.js';
-import { loadSave, storeSave } from './save.js';
+import { clearSave, hasProgress, loadSave, storeSave } from './save.js';
 import { buildCity } from './city.js';
 import { buildWorld } from './world3d.js';
 import { createFigure } from './stick3d.js';
@@ -77,6 +77,10 @@ const g = {
   garageT: 0,
   shake: 0,
   lastFine: 0,
+  // Progress-reset confirm state (title / pause): the first R press or
+  // RESET PROGRESS tap arms it, a second within a few seconds wipes the
+  // save; any other input, or the timer running out, disarms it.
+  resetArm: { armed: false, t: 0 },
   saveData: loadSave() ?? { money: 0, missionsDone: [], hasPistol: false, earned: 0 },
   shotMode: null,
   fixedCam: null,
@@ -166,6 +170,58 @@ function persist() {
   g.saveData.earned = g.earned;
   g.saveData.hasPistol = g.player.hasPistol;
   storeSave(g.saveData);
+}
+
+// --- Progress reset (title / pause screens, desktop and touch) ---
+// One shared poke for the R key and the RESET PROGRESS button: the first
+// poke arms the confirm, the second wipes. The wipe zeroes the in-memory
+// save, clears localStorage and reloads the page, so the run that follows
+// is a first-ever run by construction — no stale mission, money or pistol
+// state can survive it.
+const resetBtn = document.getElementById('btnReset');
+let resetPokeAt = 0;
+
+function disarmReset() {
+  g.resetArm.armed = false;
+  g.resetArm.t = 0;
+}
+
+function pokeReset() {
+  const now = performance.now();
+  if (now - resetPokeAt < 350) return; // a tap fires touchstart AND click
+  resetPokeAt = now;
+  // Never leave focus on the button: Enter/Space would re-click it, and an
+  // armed reset must only ever be confirmed deliberately.
+  resetBtn.blur();
+  if (!hasProgress(g.saveData)) return;
+  if (!g.resetArm.armed) {
+    g.resetArm.armed = true;
+    g.resetArm.t = 4;
+    statusEl.textContent = 'Reset armed. Press again to confirm and wipe your progress.';
+    return;
+  }
+  disarmReset();
+  g.saveData = { money: 0, missionsDone: [], hasPistol: false, earned: 0 };
+  g.money = 0;
+  g.earned = 0;
+  clearSave();
+  location.reload();
+}
+resetBtn.addEventListener('click', pokeReset);
+resetBtn.addEventListener('touchstart', (event) => {
+  event.preventDefault();
+  pokeReset();
+}, { passive: false });
+
+let lastResetBtnKey = '';
+function syncResetBtn() {
+  const show = (g.state === 'title' || g.state === 'paused') && hasProgress(g.saveData);
+  const key = `${show}|${g.resetArm.armed}`;
+  if (key === lastResetBtnKey) return;
+  lastResetBtnKey = key;
+  resetBtn.style.display = show ? 'block' : 'none';
+  resetBtn.textContent = g.resetArm.armed ? 'TAP AGAIN TO CONFIRM RESET' : 'RESET PROGRESS';
+  resetBtn.classList.toggle('armed', g.resetArm.armed);
 }
 
 function resize() {
@@ -712,6 +768,11 @@ function frame(now) {
   }
 
   if (g.state === 'title') {
+    if (input.tapped('KeyR')) {
+      pokeReset();
+    } else if (g.resetArm.armed && (input.pressed.size > 0 || input.mouse.clicked)) {
+      disarmReset(); // any other input cancels an armed reset
+    }
     if (input.tapped('Enter')) {
       g.sfx.unlock();
       g.state = 'play';
@@ -721,7 +782,12 @@ function frame(now) {
   } else if (g.state === 'busted' || g.state === 'wasted') {
     if (input.tapped('Enter')) respawn();
   } else if (g.state === 'paused') {
-    if (input.tapped('KeyP', 'Enter')) g.state = 'play';
+    if (input.tapped('KeyR')) {
+      pokeReset();
+    } else if (input.tapped('KeyP', 'Enter')) {
+      disarmReset();
+      g.state = 'play';
+    }
   } else if (g.state === 'play') {
     if (input.tapped('KeyP')) {
       g.state = 'paused';
@@ -772,6 +838,10 @@ function frame(now) {
     }
   }
 
+  if (g.resetArm.armed) {
+    g.resetArm.t -= dt;
+    if (g.resetArm.t <= 0) disarmReset();
+  }
   if (g.message) {
     g.message.t -= dt;
     if (g.message.t <= 0) g.message = null;
@@ -782,6 +852,7 @@ function frame(now) {
   }
   updateAudioState();
   updateCamera(dt);
+  syncResetBtn();
   if (touchUI) touchUI.update();
   drawHUD(g);
   renderer.render(scene, camera);
