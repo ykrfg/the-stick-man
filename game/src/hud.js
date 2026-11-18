@@ -162,6 +162,15 @@ function drawTitleMobile(g, ctx) {
   ctx.fillRect(0, 0, w, h);
   const cx = w / 2;
   ctx.textAlign = 'center';
+  // The layout flows down from the top and is FITTED into the space above
+  // the TAP TO START button's zone: the help block used to be a fixed
+  // ladder of baselines at a fixed pitch, and every feature that added a
+  // line pushed the last ones underneath the button on portrait phones.
+  // Now the row pitch (and, on short screens, the type) shrinks so the
+  // whole block — help, saved-run line, reset note — ends above the
+  // reserved button zone at the bottom of the screen.
+  const compact = h < 760;
+  const titleY = compact ? 82 : 104;
   let titleSize = Math.min(52, w * 0.128);
   ctx.font = `900 ${titleSize}px system-ui, sans-serif`;
   while (titleSize > 20 && ctx.measureText('THE STICK MAN').width > w - 18) {
@@ -171,15 +180,14 @@ function drawTitleMobile(g, ctx) {
   ctx.fillStyle = '#ffd94d';
   ctx.lineWidth = 9;
   ctx.strokeStyle = '#17181c';
-  ctx.strokeText('THE STICK MAN', cx, 104);
-  ctx.fillText('THE STICK MAN', cx, 104);
+  ctx.strokeText('THE STICK MAN', cx, titleY);
+  ctx.fillText('THE STICK MAN', cx, titleY);
   ctx.font = '600 14.5px system-ui, sans-serif';
   ctx.fillStyle = '#ffffff';
-  ctx.fillText('A tiny toon crime spree in Palmera', cx, 132);
-  logoFigure(ctx, cx - 68, 224, 1.0, '#ffffff', 'grin');
-  logoFigure(ctx, cx + 68, 224, 1.0, '#17181c', 'flat');
-  ctx.font = '500 15.5px system-ui, sans-serif';
-  ctx.fillStyle = '#e8ecf4';
+  ctx.fillText('A tiny toon crime spree in Palmera', cx, titleY + 28);
+  const figY = titleY + (compact ? 104 : 120);
+  logoFigure(ctx, cx - 68, figY, 1.0, '#ffffff', 'grin');
+  logoFigure(ctx, cx + 68, figY, 1.0, '#17181c', 'flat');
   const lines = [
     'Left thumb — move · drive',
     'Drag open screen — swing camera',
@@ -190,30 +198,47 @@ function drawTitleMobile(g, ctx) {
     "Heal at Bruno's / St. Palm · repair at Spray 'n Go",
     'Lose the cops — hide till the stars fade',
     'Free roam pays — odd jobs · hold up shops',
-    'Steal cars. Run jobs for Bruno.',
-    'Mind the stars.',
   ];
-  lines.forEach((line, i) => ctx.fillText(line, cx, 306 + i * 27));
   const save = g.saveData;
   const jobsDone = save && Array.isArray(save.missionsDone) ? save.missionsDone.length : 0;
-  if (save && (save.money > 0 || jobsDone > 0)) {
-    ctx.font = '700 16px system-ui, sans-serif';
-    ctx.fillStyle = '#7dff8a';
-    ctx.fillText(`Saved run — $${save.money} · ${jobsDone} job(s) done`, cx, 306 + lines.length * 27 + 14);
+  const showSave = !!(save && (save.money > 0 || jobsDone > 0));
+  const showReset = hasProgress(save);
+  const rows = lines.length + (showSave ? 1 : 0) + (showReset ? 1 : 0);
+  const helpTop = figY + 82;
+  const limit = h * 0.7; // the button zone lives below this line
+  const rowH = Math.min(27, Math.max(17, (limit - helpTop - 6) / Math.max(1, rows - 1)));
+  const helpSize = Math.max(12.5, Math.min(15.5, rowH * 0.6));
+  let y = helpTop;
+  ctx.font = `500 ${helpSize}px system-ui, sans-serif`;
+  ctx.fillStyle = '#e8ecf4';
+  for (const line of lines) {
+    ctx.fillText(line, cx, y);
+    y += rowH;
   }
-  if (hasProgress(save)) {
-    ctx.font = '500 12.5px system-ui, sans-serif';
+  if (showSave) {
+    ctx.font = `700 ${Math.max(13, Math.min(16, rowH * 0.64))}px system-ui, sans-serif`;
+    ctx.fillStyle = '#7dff8a';
+    ctx.fillText(`Saved run — $${save.money} · ${jobsDone} job(s) done`, cx, y);
+    y += rowH;
+  }
+  if (showReset) {
+    ctx.font = `500 ${Math.max(11.5, Math.min(12.5, rowH * 0.5))}px system-ui, sans-serif`;
     if (g.resetArm?.armed) {
       ctx.fillStyle = '#ff8a7a';
-      ctx.fillText('Tap RESET PROGRESS again to confirm!', cx, 306 + lines.length * 27 + 42);
+      ctx.fillText('Tap RESET PROGRESS again to confirm!', cx, y);
     } else {
       ctx.fillStyle = '#8b93a5';
-      ctx.fillText('RESET PROGRESS (bottom-left) starts over', cx, 306 + lines.length * 27 + 42);
+      ctx.fillText('RESET PROGRESS (bottom-left) starts over', cx, y);
     }
   }
-  ctx.font = '500 12px system-ui, sans-serif';
-  ctx.fillStyle = '#aab3c5';
-  ctx.fillText('An original stick-figure game.', cx, h - 22);
+  // The footer shares the bottom-left corner with the DOM reset button;
+  // when that button is up, the line would slide underneath it, so it
+  // only draws on a fresh (no-progress) title.
+  if (!showReset) {
+    ctx.font = '500 12px system-ui, sans-serif';
+    ctx.fillStyle = '#aab3c5';
+    ctx.fillText('An original stick-figure game.', cx, h - 22);
+  }
 }
 
 function drawTitle(g, ctx) {
