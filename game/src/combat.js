@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { PLAYER } from './config.js';
 import { buildingAt } from './city.js';
 import { hurtPed } from './people.js';
+import { damageCar } from './vehicles.js';
 import { basicMat } from './stick3d.js';
 import { makeCashPickup } from './world3d.js';
 
@@ -69,7 +70,12 @@ function landPunch(g) {
     if (car === p.car) continue;
     const d = Math.hypot(car.x - p.x, car.y - p.y);
     if (d > 44) continue;
-    car.hp -= 8;
+    // Through damageCar, never a direct hp write: a car beaten to zero
+    // by fists must actually wreck (sink, tilt, refuse entry) like any
+    // other dead car. The direct write this replaces left "zombie"
+    // cars at hp <= 0 still upright, enterable and drivable, and made
+    // traffic cars unkillable by fists and bullets.
+    damageCar(g, car, 8);
     g.events.push({ type: 'crime', kind: 'hitCar', x: car.x, y: car.y });
     hitSomething = true;
   }
@@ -129,7 +135,9 @@ export function updateBullets(g, dt) {
     if (!dead) {
       for (const car of g.cars) {
         if (Math.hypot(car.x - bullet.x, car.y - bullet.y) < 27) {
-          car.hp -= 12;
+          // Same rule as fists: damageCar owns the wreck crossing, so
+          // a shot-out car (even the player's own) dies properly.
+          damageCar(g, car, 12);
           g.events.push({ type: 'spark', x: bullet.x, y: bullet.y });
           dead = true;
           break;

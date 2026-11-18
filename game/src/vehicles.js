@@ -326,8 +326,8 @@ export function damageCar(g, car, amount) {
  * because parked cars have no update loop to tick a timer down. It
  * gates ONLY the HP: the impact's bounce, shove, speed cut and crash
  * event (sound/shake/heat) still happen on every contact frame, so the
- * driving feel is unchanged. Fist damage (damageCar from main.js,
- * direct hp in combat.js) keeps its own pacing and never comes here.
+ * driving feel is unchanged. Fist and bullet damage (damageCar from
+ * main.js and combat.js) keeps its own pacing and never comes here.
  */
 export function crashDamageCar(g, car, amount) {
   if (car.wrecked || !(amount > 0)) return;
