@@ -292,56 +292,66 @@ export function buildWorld(scene, city) {
   // Touch the gradient so toon materials compile with it from the first frame.
   toonGradient();
 
-  // Base ground and block pavements.
+  // Base ground and block pavements. The flat ground layers sit on a spread
+  // ladder of heights (steps of ~0.14 or more): planes stacked within a few
+  // hundredths of a unit z-fight at city viewing distances, so no two
+  // overlapping surfaces may sit closer than that.
   const base = flatPlane(WORLD.width + 500, WORLD.height + 500, toonMat(0xb9c98d));
-  base.position.set(WORLD.width / 2, -0.05, WORLD.height / 2);
+  base.position.set(WORLD.width / 2, -0.3, WORLD.height / 2);
   group.add(base);
   const sidewalkMat = toonMat(0xe8e2d0);
   for (const block of city.blocks) {
     if (block.row === 5) continue;
     const p = flatPlane(block.w, block.h, sidewalkMat);
-    p.position.set(block.x + block.w / 2, 0.02, block.y + block.h / 2);
+    p.position.set(block.x + block.w / 2, 0, block.y + block.h / 2);
     group.add(p);
   }
   if (city.park) {
     const p = flatPlane(city.park.w, city.park.h, toonMat(0x8fce6e));
-    p.position.set(city.park.x + city.park.w / 2, 0.04, city.park.y + city.park.h / 2);
+    p.position.set(city.park.x + city.park.w / 2, 0.14, city.park.y + city.park.h / 2);
     group.add(p);
   }
   // Beach sand and the sea beyond the south edge.
   const sand = flatPlane(WORLD.width, WORLD.height - city.beachY, toonMat(0xf2ddab));
-  sand.position.set(WORLD.width / 2, 0.03, (city.beachY + WORLD.height) / 2);
+  sand.position.set(WORLD.width / 2, 0.14, (city.beachY + WORLD.height) / 2);
   group.add(sand);
   const sea = flatPlane(WORLD.width + 900, 620, toonMat(0x3f9fd8));
-  sea.position.set(WORLD.width / 2, -0.5, WORLD.height + 300);
+  sea.position.set(WORLD.width / 2, -0.75, WORLD.height + 300);
   group.add(sea);
   // The pier: a wooden jetty reaching into the sea near the warehouse.
   const pierDeck = new THREE.Mesh(new THREE.BoxGeometry(84, 5, 430), toonMat(0xa97c50));
   pierDeck.position.set(3085, 2.5, WORLD.height - 190);
   group.add(pierDeck);
 
-  // Roads: one textured plane per avenue and street, plain squares on crossings.
+  // Roads: one textured plane per avenue and street, plain squares on
+  // crossings. Avenues and streets share one level and the crossing squares
+  // sit a clear step above both (they used to be 0.01 apart, all three
+  // coplanar at the crossings, and the whole square flickered); polygonOffset
+  // on the road materials is a second line of defence.
   const vTex = makeRoadTexture(false);
   vTex.repeat.set(1, WORLD.height / 256);
-  const vRoadMat = new THREE.MeshToonMaterial({ map: vTex, gradientMap: toonGradient() });
+  const vRoadMat = new THREE.MeshToonMaterial({ map: vTex, gradientMap: toonGradient(), polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
   for (const avenue of ROAD.avenues) {
     const p = flatPlane(ROAD.width, WORLD.height, vRoadMat);
-    p.position.set(avenue, 0.05, WORLD.height / 2);
+    p.position.set(avenue, 0.28, WORLD.height / 2);
     group.add(p);
   }
   const hTex = makeRoadTexture(true);
   hTex.repeat.set(1, WORLD.width / 256);
-  const hRoadMat = new THREE.MeshToonMaterial({ map: hTex, gradientMap: toonGradient() });
+  const hRoadMat = new THREE.MeshToonMaterial({ map: hTex, gradientMap: toonGradient(), polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
   for (const street of ROAD.streets) {
     const p = flatPlane(WORLD.width, ROAD.width, hRoadMat);
-    p.position.set(WORLD.width / 2, 0.05, street);
+    p.position.set(WORLD.width / 2, 0.28, street);
     group.add(p);
   }
   const asphaltMat = toonMat(0x4a4a52);
+  asphaltMat.polygonOffset = true;
+  asphaltMat.polygonOffsetFactor = -2;
+  asphaltMat.polygonOffsetUnits = -2;
   for (const avenue of ROAD.avenues) {
     for (const street of ROAD.streets) {
       const p = flatPlane(ROAD.width, ROAD.width, asphaltMat);
-      p.position.set(avenue, 0.06, street);
+      p.position.set(avenue, 0.42, street);
       group.add(p);
     }
   }
@@ -374,11 +384,13 @@ export function buildWorld(scene, city) {
       : toonMat(new THREE.Color(b.wall).getHex());
     const narrowMat = faceMat(narrow);
     const wideMat = faceMat(wide);
+    // The box stops 0.4 short of the full height so its top face is not
+    // exactly coplanar with the parapet slab's underside.
     const box = new THREE.Mesh(
-      new THREE.BoxGeometry(b.w, hgt, b.h),
+      new THREE.BoxGeometry(b.w, hgt - 0.4, b.h),
       [narrowMat, narrowMat, roofMat, roofMat, wideMat, wideMat],
     );
-    box.position.set(cx, hgt / 2, cz);
+    box.position.set(cx, (hgt - 0.4) / 2, cz);
     group.add(box);
     // Parapet: the familiar cap slab, in the building's trim colour, with a
     // slightly inset roof deck on top wearing a varied flat roof tone.
@@ -403,17 +415,19 @@ export function buildWorld(scene, city) {
       const stand = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.8, 6, 8), metalMat);
       stand.position.y = 3;
       tower.add(tank, cone, stand);
-      tower.position.set(cx + offX, hgt + 7, cz + offZ);
+      tower.position.set(cx + offX, hgt + 6.7, cz + offZ);
       group.add(tower);
     } else if (propR < 0.62) {
+      // Props sink a few tenths into the deck/unit below them: faces resting
+      // exactly on a surface are coplanar and can shimmer at glancing angles.
       const ac = new THREE.Mesh(new THREE.BoxGeometry(15, 7, 11), acMat);
-      ac.position.set(cx + offX, hgt + 10.5, cz + offZ);
+      ac.position.set(cx + offX, hgt + 10.3, cz + offZ);
       const acTop = new THREE.Mesh(new THREE.BoxGeometry(11, 1.8, 8), acTopMat);
-      acTop.position.set(cx + offX, hgt + 14.9, cz + offZ);
+      acTop.position.set(cx + offX, hgt + 14.5, cz + offZ);
       group.add(ac, acTop);
     } else if (propR < 0.78) {
       const vent = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 7, 8), acTopMat);
-      vent.position.set(cx + offX, hgt + 10.5, cz + offZ);
+      vent.position.set(cx + offX, hgt + 10.2, cz + offZ);
       group.add(vent);
     }
 
@@ -428,14 +442,16 @@ export function buildWorld(scene, city) {
       for (let f = 1; f < floors; f += 1) {
         const py = f * 27 - 5;
         const plat = new THREE.Mesh(platGeo, metalMat);
-        plat.position.set(b.x + b.w + 3.5, py, cz + (f % 2 === 0 ? -platW / 4 : platW / 4));
+        // Sunk 0.4 into the wall: a platform face exactly flush with the
+        // facade plane is coplanar with it and flickers.
+        plat.position.set(b.x + b.w + 3.1, py, cz + (f % 2 === 0 ? -platW / 4 : platW / 4));
         group.add(plat);
         if (prev) {
           const dz = plat.position.z - prev.position.z;
           const dy = py - prev.position.y;
           const len = Math.hypot(dz, dy);
           const stair = new THREE.Mesh(new THREE.BoxGeometry(5, 1.2, len), metalMat);
-          stair.position.set(b.x + b.w + 3.5, (py + prev.position.y) / 2, (plat.position.z + prev.position.z) / 2);
+          stair.position.set(b.x + b.w + 3.1, (py + prev.position.y) / 2, (plat.position.z + prev.position.z) / 2);
           stair.rotation.x = -Math.atan2(dy, dz);
           group.add(stair);
         }
@@ -491,8 +507,12 @@ export function buildWorld(scene, city) {
   const carport = new THREE.Mesh(new THREE.BoxGeometry(zone.w + 26, 5, zone.h + 26), toonMat(0x37b24d));
   carport.position.set(zone.x + zone.w / 2, 35, zone.y + zone.h / 2);
   group.add(carport);
-  const pad = flatPlane(zone.w + 16, zone.h + 16, toonMat(0xc9c9c9));
-  pad.position.set(zone.x + zone.w / 2, 0.07, zone.y + zone.h / 2);
+  const padMat = new THREE.MeshToonMaterial({
+    color: 0xc9c9c9, gradientMap: toonGradient(),
+    polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
+  });
+  const pad = flatPlane(zone.w + 16, zone.h + 16, padMat);
+  pad.position.set(zone.x + zone.w / 2, 0.56, zone.y + zone.h / 2);
   group.add(pad);
 
   // Trees and palms.
@@ -554,10 +574,13 @@ export function makeMarker(colorHex = 0xffcf3f, label = '!') {
   group.add(beam);
   const disc = new THREE.Mesh(
     new THREE.CircleGeometry(15, 22),
-    new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.5, depthWrite: false }),
+    new THREE.MeshBasicMaterial({
+      color: colorHex, transparent: true, opacity: 0.5, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    }),
   );
   disc.rotation.x = -Math.PI / 2;
-  disc.position.y = 0.4;
+  disc.position.y = 0.95;
   group.add(disc);
   const sprite = makeTextSprite(label, { size: 64, color: '#ffd94d', scale: 1.15 });
   sprite.position.y = 122;

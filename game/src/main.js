@@ -32,7 +32,7 @@ const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(55, 1, 0.5, 4200);
+const camera = new THREE.PerspectiveCamera(55, 1, 5, 4200);
 const hudCanvas = document.getElementById('hud');
 const hudCtx = hudCanvas.getContext('2d');
 

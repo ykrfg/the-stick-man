@@ -56,7 +56,7 @@ export function makeCarMesh(colorHex, police = false) {
   let lightR = null;
   if (police) {
     const bar = new THREE.Mesh(new THREE.BoxGeometry(13, 2.6, 9), basicMat(0x23232b));
-    bar.position.set(-2, 21.6, 0);
+    bar.position.set(-2, 21.2, 0); // sunk into the cabin roof, not resting exactly on it
     group.add(bar);
     const bulbGeo = new THREE.SphereGeometry(2.9, 10, 8);
     lightL = new THREE.Mesh(bulbGeo, basicMat(0xff3b30));

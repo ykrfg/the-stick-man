@@ -154,10 +154,16 @@ export function createFigure(opts = {}) {
   // Soft blob shadow that stays flat on the ground whatever the body does.
   const shadow = new THREE.Mesh(
     new THREE.CircleGeometry(10, 20),
-    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.2, depthWrite: false }),
+    new THREE.MeshBasicMaterial({
+      color: 0x000000, transparent: true, opacity: 0.2, depthWrite: false,
+      // The blob floats above the whole ground-plane ladder (roads and
+      // crossing squares included) and polygonOffset keeps it winning the
+      // depth test against whichever surface is underneath.
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    }),
   );
   shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = 0.07;
+  shadow.position.y = 0.62;
   group.add(shadow);
 
   const HIP_H = 16;
