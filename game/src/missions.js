@@ -146,6 +146,40 @@ function crateSpot(g) {
   return { x: L.pier.x, y: L.pier.y - 35 };
 }
 
+/**
+ * A rival counts as beaten when he is down — or already gone from the
+ * world. The only way a posted man leaves g.peds mid-mission is the
+ * down-timer in updatePeds removing a beaten body (or the mission's own
+ * cleanup, which runs after the count), so an absent rival is a beaten
+ * one; counting only the state would leave a wave short a man it can
+ * never produce again.
+ */
+function rivalBeaten(g, r) {
+  return r.state === 'down' || !g.peds.includes(r);
+}
+
+/**
+ * The raid fight's living target: the nearest rival still standing.
+ * The door and yard waves are posted at accept time and fight where
+ * they stand, so during those two phases the objective — marker,
+ * minimap blip and distance readout alike — stands on this man, not
+ * on the warehouse doorstep the drive pointed at: a survivor knocked
+ * across the yard is where the fight actually is.
+ */
+function nearestStandingRival(g) {
+  let best = null;
+  let bestD = Infinity;
+  for (const r of g.mission.rivals) {
+    if (rivalBeaten(g, r)) continue;
+    const d = Math.hypot(r.x - g.player.x, r.y - g.player.y);
+    if (d < bestD) {
+      bestD = d;
+      best = r;
+    }
+  }
+  return best;
+}
+
 /** Start the current mission (the player talked to Bruno). */
 export function acceptMission(g) {
   const m = g.mission;
@@ -418,9 +452,14 @@ export function objectiveTarget(g) {
     case 'returnBruno': return { x: L.diner.x, y: L.diner.y };
     case 'raidDrive':
     case 'raidDoor':
-    case 'raidFightDoor':
-    case 'raidFightYard':
       return { x: L.pier.x, y: L.pier.y };
+    case 'raidFightDoor':
+    case 'raidFightYard': {
+      // The fight is the target: the nearest man still standing, so a
+      // survivor displaced from the doorstep is pointed at himself.
+      const r = nearestStandingRival(g);
+      return r ? { x: r.x, y: r.y } : { x: L.pier.x, y: L.pier.y };
+    }
     case 'grabCrate': return crateSpot(g);
     // raidEscapeCar (any car will do) and loseLaw / escapeHeat (the
     // target is the heat itself) have no place to point at.
@@ -783,23 +822,30 @@ export function updateMissions(g, dt, time) {
         g.say(t('say.raidGuards.title'), t('say.raidGuards.sub'), 3);
       }
     } else if (m.phase === 'raidFightDoor') {
-      setMarker(g, g.markerRed, L.pier.x, L.pier.y);
+      const tgt = nearestStandingRival(g);
+      setMarker(g, g.markerRed, tgt ? tgt.x : L.pier.x, tgt ? tgt.y : L.pier.y);
       g.markerGold.visible = false;
-      if (m.rivals.every((r) => r.state === 'down')) {
+      if (m.rivals.every((r) => rivalBeaten(g, r))) {
         for (const rival of m.rivals) removePed(g, rival);
         // The yard crew becomes the fight: posted since accept time,
-        // they only wake now that the door is clear.
+        // they only wake now that the door is clear. The wake is the
+        // same guarded flip every other wave in this file gets — a man
+        // already down stays down. He may have been beaten while he
+        // waited (a stray shot, a car through the yard) and even
+        // removed by the down-timer; flipping him to 'fight'
+        // unconditionally resurrected exactly that man as a ghost the
+        // count could never satisfy again, soft-locking the step.
         m.rivals = m.yardMen;
         m.yardMen = [];
-        for (const rival of m.rivals) rival.state = 'fight';
+        for (const rival of m.rivals) if (rival.state === 'idle') rival.state = 'fight';
         m.phase = 'raidFightYard';
         g.say(t('say.yard.title'), t('say.yard.sub'), 3);
       }
     } else if (m.phase === 'raidFightYard') {
-      const spot = crateSpot(g);
-      setMarker(g, g.markerRed, spot.x, spot.y);
+      const tgt = nearestStandingRival(g);
+      setMarker(g, g.markerRed, tgt ? tgt.x : L.pier.x, tgt ? tgt.y : L.pier.y);
       g.markerGold.visible = false;
-      if (m.rivals.every((r) => r.state === 'down')) {
+      if (m.rivals.every((r) => rivalBeaten(g, r))) {
         for (const rival of m.rivals) removePed(g, rival);
         m.rivals = [];
         m.phase = 'grabCrate';
