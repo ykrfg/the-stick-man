@@ -101,6 +101,27 @@ export const CRASH_GRACE = 0.8;
 
 export const SAVE_KEY = 'the-stick-man-save-v1';
 
+/**
+ * Traffic yielding to pedestrians. A traffic car brakes for anyone in
+ * its lane corridor ahead: the target speed is the fastest speed from
+ * which it can still stop `gap` units short of the person (centre to
+ * centre — physical contact is ~32), following the braking curve
+ * v = sqrt(2 * brake * (along - gap)). `brake` sits well under the
+ * 260 u/s^2 the speed approach can actually deliver, so the car eases
+ * in and halts with room to spare instead of arriving at the curve's
+ * limit. Sidewalk walkers stand ~45 units off the lane line, outside
+ * `corridor`, and never trigger a stop.
+ */
+export const TRAFFIC_YIELD = { gap: 48, brake: 170, corridor: 30, range: 200 };
+
+/**
+ * Off-screen traffic warnings (on foot only): a car counts as a threat
+ * when it is within `radius`, moving, and its closest point of approach
+ * to the player over the next `cpaTime` seconds is under `cpaDist`.
+ * At most `max` indicators show at once, most urgent first.
+ */
+export const TRAFFIC_WARN = { radius: 450, cpaTime: 3, cpaDist: 62, max: 4 };
+
 /** Price of the pistol at the Ammo Hut, and the Spray 'n Go fee per wanted star. */
 export const PISTOL_PRICE = 120;
 export const SPRAY_PER_STAR = 40;

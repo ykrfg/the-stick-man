@@ -4,7 +4,7 @@
 // network lane by lane, the player's arcade driving, and the shared collision
 // resolution (buildings, other cars, pedestrians) that police cars reuse.
 import * as THREE from 'three';
-import { CAR, COURIER_HP, CRASH_DAMAGE, CRASH_GRACE, PLAYER, ROAD, WORLD } from './config.js';
+import { CAR, COURIER_HP, CRASH_DAMAGE, CRASH_GRACE, PLAYER, ROAD, TRAFFIC_WARN, TRAFFIC_YIELD, WORLD } from './config.js';
 import { clampToWorld, resolveCircleCollision } from './city.js';
 import { toonMat, basicMat } from './stick3d.js';
 
@@ -562,6 +562,31 @@ export function updateTraffic(g, dt) {
       if (Math.abs(lateral) < 34 && along > 0 && along < 80) {
         targetSpeed = Math.min(targetSpeed, Math.max(0, (along - 52) * 4));
       }
+    }
+    // Pedestrians in the path get the same courtesy, on a braking
+    // curve: the target speed is the fastest speed from which this car
+    // can still stop TRAFFIC_YIELD.gap short of the person, so it eases
+    // in and halts instead of plowing through. The PLAYER first and
+    // foremost — a car coming down the street must never run down a
+    // player it had time to stop for (until now traffic never braked
+    // for anyone, and updatePlayerCarHits was the only thing standing
+    // between a crossing player and a car arriving from off-screen) —
+    // and any citizen caught in the lane gets the same mercy. A car
+    // already on top of someone at speed can still clip them; the
+    // curve only promises a stop when there was road to stop in.
+    // Police in pursuit and the courier never run this code.
+    const yieldFor = (px, py) => {
+      const lateral = car.axis === 'y' ? px - car.lane : py - car.lane;
+      if (Math.abs(lateral) >= TRAFFIC_YIELD.corridor) return;
+      const along = car.axis === 'y' ? (py - car.y) * car.dir : (px - car.x) * car.dir;
+      if (along <= 0 || along > TRAFFIC_YIELD.range) return;
+      const t = Math.sqrt(2 * TRAFFIC_YIELD.brake * Math.max(0, along - TRAFFIC_YIELD.gap));
+      if (t < targetSpeed) targetSpeed = t;
+    };
+    if (g.player.state === 'foot') yieldFor(g.player.x, g.player.y);
+    for (const ped of g.peds) {
+      if (ped.state === 'down' || ped.state === 'inCar') continue;
+      yieldFor(ped.x, ped.y);
     }
     car.speed += Math.max(-260 * dt, Math.min(200 * dt, targetSpeed - car.speed));
     const along = (car.axis === 'y' ? car.y : car.x) + car.dir * car.speed * dt;
