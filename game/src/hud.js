@@ -4,7 +4,7 @@
 // pause, busted and wasted screens. The title screen draws two little stick
 // figures in canvas lines — the white hero and the black rival — as a logo.
 import { HEAT_THRESHOLDS, PLAYER, ROAD, WORLD } from './config.js';
-import { objectiveTarget, objectiveText } from './missions.js';
+import { jobAvailable, missionAvailable, objectiveTarget, objectiveText } from './missions.js';
 import { hasProgress } from './save.js';
 import { starsFor } from './police.js';
 import { PROMPT_PREFIX, t } from './i18n.js';
@@ -118,8 +118,8 @@ function drawMinimap(g, ctx) {
     ctx.fillStyle = color;
     ctx.fill();
   };
-  // Bruno, when he has work.
-  if (!g.mission.active && g.mission.index < 3) {
+  // Bruno, when he has work (a story job, or odd jobs in free roam).
+  if (!g.mission.active && (missionAvailable(g) || jobAvailable(g))) {
     const b = g.city.landmarks.diner;
     dot(b.x, b.y, 4, '#ffd94d');
   }

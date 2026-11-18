@@ -104,3 +104,13 @@ export const TREAT_PRICE = 40;
 export const ROBBERY_TIME = 2.5;
 export const ROBBERY_HEAT = 100;
 export const ROBBERY_COOLDOWN = 240;
+
+/**
+ * Story missions 4–6 tuning. The COURIER HIT car shrugs off glancing
+ * hits (extra HP over a normal car's 100): a couple of solid hits still
+ * total it, and pinning it stopped works too. The WAREHOUSE RAID's
+ * opening drive is timed for a bonus — never for a fail.
+ */
+export const COURIER_HP = 140;
+export const RAID_TIMER = 150;
+export const RAID_TIME_BONUS = 100;

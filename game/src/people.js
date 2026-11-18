@@ -35,7 +35,7 @@ let pedSeq = 0;
 // player's. The slight per-person variation keeps the crowd individual.
 const PED_HEAD_TINTS = [0xe7dfc9, 0xdfd7c2, 0xe9e3d3, 0xdcd4bd, 0xe2dbc9];
 
-export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex = -1 } = {}) {
+export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex = -1, hp = null, chase = null, punchRate = null } = {}) {
   const rng = g.rng;
   let spot = { x, y, axis: 'y', line: x, dir: 1 };
   if (x === 0 && y === 0) {
@@ -56,7 +56,7 @@ export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex
     shopIndex,
     x, y,
     angle: rng.range(0, Math.PI * 2),
-    hp: role === 'cop' ? 120 : role === 'rival' ? 100 : 60,
+    hp: hp ?? (role === 'cop' ? 120 : role === 'rival' ? 100 : 60),
     state: role === 'bruno' ? 'idle' : 'walk',
     fig,
     axis: spot.axis,
@@ -73,6 +73,11 @@ export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex
     dodgeX: 0,
     dodgeY: 0,
     punchCd: rng.range(0.2, 0.7),
+    // Elite-fighter overrides (mission escorts and raid crews): a faster
+    // chase and a faster punch than the rank and file, when the spawn
+    // asks for them. Null keeps the role defaults in the fight case.
+    chase,
+    punchRate,
     exprT: 0,
     baseExpr: role === 'ped' ? 'neutral' : 'angry',
   };
@@ -511,13 +516,13 @@ export function updatePeds(g, dt, time) {
           break;
         }
         if (d > (p.state === 'car' ? 40 : 30)) {
-          moveToward(g, ped, target.x, target.y, dt, ped.role === 'cop' ? 196 : 178);
+          moveToward(g, ped, target.x, target.y, dt, ped.chase ?? (ped.role === 'cop' ? 196 : 178));
         } else {
           ped.speedNow = 0;
           ped.angle = Math.atan2(target.y - ped.y, target.x - ped.x);
           ped.punchCd -= dt;
           if (ped.punchCd <= 0) {
-            ped.punchCd = ped.role === 'cop' ? 0.85 : 0.95;
+            ped.punchCd = ped.punchRate ?? (ped.role === 'cop' ? 0.85 : 0.95);
             ped.fig.triggerPunch();
             g.events.push({ type: 'npcpunch', ped, targetCar: p.state === 'car' });
           }

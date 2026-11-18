@@ -4,7 +4,7 @@
 // network lane by lane, the player's arcade driving, and the shared collision
 // resolution (buildings, other cars, pedestrians) that police cars reuse.
 import * as THREE from 'three';
-import { CAR, CRASH_DAMAGE, PLAYER, ROAD, WORLD } from './config.js';
+import { CAR, COURIER_HP, CRASH_DAMAGE, PLAYER, ROAD, WORLD } from './config.js';
 import { clampToWorld, resolveCircleCollision } from './city.js';
 import { toonMat, basicMat } from './stick3d.js';
 
@@ -199,6 +199,67 @@ export function removeCar(g, car) {
   g.scene.remove(car.mesh);
   const i = g.cars.indexOf(car);
   if (i >= 0) g.cars.splice(i, 1);
+}
+
+/**
+ * The COURIER HIT car: a charcoal wagon looping the city's ring of road
+ * centres — street 720 east, avenue 2480 south, street 2040 west, avenue
+ * 720 north. It is nobody's fleet car (kind 'courier': traffic ignores
+ * it, police ignore it, and the player cannot climb in — a driver sits
+ * at the wheel with the doors locked, see nearestEnterableCar in
+ * main.js). It carries extra HP (COURIER_HP), drives itself through
+ * moveFreeCar so the crash-damage system is what stops it, and tracks
+ * how long it has been held near-stationary (stillT) so the mission
+ * can also accept a good pin as a stop.
+ */
+export function spawnCourierCar(g) {
+  const car = baseCar('courier', 694, 720, 0, 0x39424e);
+  car.hp = COURIER_HP;
+  car.wps = [
+    { x: 2480, y: 720 },
+    { x: 2480, y: 2040 },
+    { x: 720, y: 2040 },
+    { x: 720, y: 720 },
+  ];
+  car.wp = 0;
+  car.stillT = 0;
+  car.speed = 200;
+  g.cars.push(car);
+  g.scene.add(car.mesh);
+  syncCarMesh(car, 0);
+  return car;
+}
+
+/**
+ * Drive the courier for one frame (called by missions.js while the
+ * intercept step runs): steer for the next loop waypoint, cruise the
+ * ring, hurry when the player's car closes in. All collision, crash
+ * damage and run-over reporting comes free from moveFreeCar.
+ */
+export function driveCourier(g, car, dt) {
+  if (car.wrecked) {
+    car.speed = 0;
+    car.stillT = (car.stillT ?? 0) + dt;
+    syncCarMesh(car, dt);
+    return;
+  }
+  const wp = car.wps[car.wp ?? 0];
+  if (wp) {
+    const dx = wp.x - car.x;
+    const dy = wp.y - car.y;
+    if (Math.hypot(dx, dy) < 85) car.wp = ((car.wp ?? 0) + 1) % car.wps.length;
+    const desired = Math.atan2(dy, dx);
+    let diff = desired - car.angle;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    car.angle += Math.max(-2.0 * dt, Math.min(2.0 * dt, diff));
+  }
+  const p = g.player;
+  const fleeing = p.state === 'car' && Math.hypot(p.x - car.x, p.y - car.y) < 360;
+  const target = fleeing ? 295 : 200;
+  car.speed += Math.max(-300 * dt, Math.min(240 * dt, target - car.speed));
+  moveFreeCar(g, car, dt);
+  car.stillT = Math.abs(car.speed) < 25 ? (car.stillT ?? 0) + dt : 0;
 }
 
 /**
