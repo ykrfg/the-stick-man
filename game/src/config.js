@@ -68,6 +68,10 @@ export const CAR = {
   maxReverse: 150,
   accel: 360,
   brake: 520,
+  // Handbrake (Space / touch BRAKE): a hard linear haul toward a stop,
+  // deliberately stronger than the foot brake — it also cuts the engine,
+  // so it works with the throttle held (see drivePlayerCar).
+  handbrake: 780,
   turnRate: 2.7,
   trafficSpeed: 165,
   policeSpeed: 470,

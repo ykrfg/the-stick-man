@@ -97,6 +97,13 @@ function baseCar(kind, x, y, angle, colorHex) {
     // to hp <= 0 while the player drove it: it never moves again.
     touched: false,
     wrecked: false,
+    // Crash-encounter record (player's car only, written by moveFreeCar):
+    // the partner whose crash impact last damaged this car, and the
+    // window during which that same partner cannot damage it again.
+    // The record clears early once the pair has properly parted (see
+    // the top of moveFreeCar), so a genuinely new encounter counts.
+    crashPartner: null,
+    crashPartnerUntil: 0,
     // Driving feel only (the player's car): body roll into a corner, and
     // the handbrake's slide — the angle by which the car's travel lags
     // its nose. Both settle back to 0 on their own.
@@ -360,6 +367,18 @@ export function moveFreeCar(g, car, dt) {
     syncCarMesh(car, dt);
     return;
   }
+  // A crash-encounter record (see the impact branch below) ends once
+  // the pair has properly parted — the partner is gone from the world
+  // or the cars are well clear of each other — so the NEXT meeting is
+  // a new encounter whose first hit counts again.
+  if (car.crashPartner) {
+    const partner = car.crashPartner;
+    if (!g.cars.includes(partner)
+      || Math.hypot(car.x - partner.x, car.y - partner.y) > 110) {
+      car.crashPartner = null;
+      car.crashPartnerUntil = 0;
+    }
+  }
   applyShove(car, dt);
   const prevSpeed = car.speed;
   // While drifting, the car travels a little wide of where its nose
@@ -427,26 +446,68 @@ export function moveFreeCar(g, car, dt) {
       if (other.kind === 'parked') {
         // Parked cars have no update loop to carry a shove velocity, so
         // the knock lands as extra displacement right now.
-        const extra = Math.min(30, closing * 0.09);
+        const extra = Math.min(44, closing * 0.13);
         other.x -= nx * extra;
         other.y -= ny * extra;
         settleShovedCar(g, other);
       } else {
-        other.shoveX -= nx * closing * 0.75;
-        other.shoveY -= ny * closing * 0.75;
+        other.shoveX -= nx * closing * 0.9;
+        other.shoveY -= ny * closing * 0.9;
       }
-      // The mover sheds speed in proportion to the blow: a brush at
-      // matched speed costs almost nothing, a full-tilt rear-end still
-      // costs about half. Below the threshold there is no cut at all —
-      // the grind keeps its speed and shoves the other car ahead.
+      // The pair must actually PART. The positional nudge above only
+      // untangles the overlap; at speed the mover used to keep half its
+      // pace and drive straight back into the same car, so one accident
+      // re-hit every crash-grace window (the player's report: "the
+      // bounce is too weak and I just eat consecutive hits"). Now the
+      // mover is knocked back along the normal as a shove, and loses a
+      // further slice of speed to a rebound scaled by how head-on the
+      // hit was — a full-tilt head-on nearly stops it, a glancing
+      // side-swipe barely does.
+      car.shoveX += nx * closing * 0.5;
+      car.shoveY += ny * closing * 0.5;
       car.speed *= 1 - 0.5 * strength;
+      const velSign = Math.sign(car.speed) || 1;
+      const headOn = Math.max(0, Math.min(1,
+        -(Math.cos(travel) * velSign * nx + Math.sin(travel) * velSign * ny)));
+      // The rebound grows with the blow: a tap leaves the mover rolling
+      // forward, a full-strength head-on throws it bodily backward, so
+      // the pair's separation keeps growing instead of the mover
+      // coasting straight back into the same car (measured before this
+      // scaling: the gap shrank again inside the first second).
+      car.speed -= velSign * closing * (0.35 + 0.35 * strength) * headOn;
       // Both cars pay for a real impact, the struck car more than the
       // mover (CRASH_DAMAGE) — through the grace window, so a contact
       // that lasts many frames still costs only the one hit. A wrecked
       // car takes no further damage; damageCar handles the crossing
       // into the wreck state.
-      crashDamageCar(g, car, strength * CRASH_DAMAGE.mover);
-      crashDamageCar(g, other, strength * CRASH_DAMAGE.struck);
+      // ONE exception, for the PLAYER's car: one crash encounter with
+      // one partner costs it one hit, full stop. The per-car grace
+      // above re-opens every 0.8s, so a grind or a boxed-in pile-up —
+      // where the pair physically cannot part — kept billing the
+      // player a fresh hit each window until the car died (measured:
+      // 5 hits, HP 100 -> 18, over 4 pinned seconds). After a partner
+      // has damaged the player's car, that partner is recorded and
+      // cannot damage it again until the pair has properly parted
+      // (cleared at the top of this function) or the record lapses.
+      // Damage the player's car DEALS is never gated, and neither is
+      // any other car's — ramming the courier still wears it down hit
+      // by hit, and a fresh partner always lands its own first hit.
+      const playerCar = car.occupant === 'player' ? car
+        : (other.occupant === 'player' ? other : null);
+      const partner = playerCar === null ? null : (playerCar === car ? other : car);
+      const gated = playerCar !== null
+        && playerCar.crashPartner === partner
+        && g.time < playerCar.crashPartnerUntil;
+      // The gate is per VICTIM: it shields only the player's car. The
+      // other car keeps paying on the ordinary grace schedule — a
+      // courier being rammed in a sustained pin still wears down hit
+      // by hit, exactly as before.
+      if (car !== playerCar || !gated) crashDamageCar(g, car, strength * CRASH_DAMAGE.mover);
+      if (other !== playerCar || !gated) crashDamageCar(g, other, strength * CRASH_DAMAGE.struck);
+      if (playerCar !== null && !gated) {
+        playerCar.crashPartner = partner;
+        playerCar.crashPartnerUntil = g.time + 6;
+      }
       g.events.push({ type: 'crash', strength, byPlayer: car.occupant === 'player' });
     }
   }
@@ -534,7 +595,21 @@ export function drivePlayerCar(g, dt) {
   const axes = g.input.axes();
   const throttle = -axes.y;
   const steer = axes.x;
-  if (throttle > 0) {
+  // --- Handbrake (Space; the touch DASH button doubles as BRAKE in a
+  // car). It is read FIRST because it overrides the throttle outright:
+  // the engine is cut and the rear wheels haul the car toward a stop
+  // with a hard LINEAR deceleration (CAR.handbrake, stronger than the
+  // foot brake), from either direction of travel. What DeepSeek's
+  // brush-up shipped here was only a proportional scrub (0.45 * speed
+  // per second, on top of the ordinary coast drag): barely better than
+  // coasting from top speed, and with W held the engine simply out-pulled
+  // it — the car stayed pinned at max speed, which is exactly what the
+  // player reported as "the brake doesn't work".
+  const handbrake = g.input.down('Space');
+  if (handbrake) {
+    const step = CAR.handbrake * dt;
+    car.speed = Math.abs(car.speed) <= step ? 0 : car.speed - Math.sign(car.speed) * step;
+  } else if (throttle > 0) {
     car.speed = Math.min(CAR.maxSpeed, car.speed + CAR.accel * dt);
   } else if (throttle < 0) {
     if (car.speed > 12) car.speed = Math.max(0, car.speed - CAR.brake * dt);
@@ -543,13 +618,12 @@ export function drivePlayerCar(g, dt) {
     car.speed -= car.speed * 0.5 * dt;
     if (Math.abs(car.speed) < 4) car.speed = 0;
   }
-  // --- Handbrake (Space; the touch DASH button doubles as BRAKE in a
-  // car). Held at speed it lets the nose come round faster than grip
-  // would allow, scrubs a little speed, and lets the car's travel lag
-  // behind its heading — the rear steps out and the slide is visible
-  // from behind. Released, grip returns and the drift washes out.
+  // Held at speed the handbrake also lets the nose come round faster
+  // than grip would allow, and lets the car's travel lag behind its
+  // heading — the rear steps out and the slide is visible from behind.
+  // Released, grip returns and the drift washes out. (The speed cost of
+  // sliding is the deceleration above; there is no separate scrub.)
   const speedAbs = Math.abs(car.speed);
-  const handbrake = g.input.down('Space');
   const sliding = handbrake && speedAbs > 90;
   if (car.speed !== 0) {
     const grip = Math.max(-1, Math.min(1, car.speed / 130));
@@ -558,7 +632,6 @@ export function drivePlayerCar(g, dt) {
   if (sliding) {
     const dir = Math.sign(car.speed) || 1;
     car.drift = Math.max(-0.5, Math.min(0.5, (car.drift ?? 0) + steer * dir * 2.1 * dt));
-    car.speed -= car.speed * 0.45 * dt;
   } else {
     car.drift = (car.drift ?? 0) * Math.max(0, 1 - 5 * dt);
     if (Math.abs(car.drift) < 0.002) car.drift = 0;
