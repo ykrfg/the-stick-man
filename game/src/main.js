@@ -515,7 +515,17 @@ function processEvents() {
         // full damage lands only on ordinary pedestrians.
         runOverPed(g, ev.ped, ev.speed);
         g.sfx.punch();
-        if (ev.byPlayer) addHeat(g, HEAT_FOR.runOver, ev.ped.x, ev.ped.y);
+        // Bruno earns the driver no heat, ever. He cannot fall
+        // (hurtPed keeps him on his feet whatever hits him), so the
+        // run-over scan in vehicles.js — which bills every tick a
+        // fast car spends within reach of a standing ped — would
+        // otherwise charge a fresh runOver for EVERY tick a car rests
+        // against him: a pinned second at the diner door measured
+        // 1,264 heat, five stars, for a man who was not even hurt.
+        // Ordinary peds leave the scan by falling; Bruno never does.
+        // The hit itself is unchanged — he still flinches — and every
+        // other pedestrian still bills exactly as before.
+        if (ev.byPlayer && ev.ped.role !== 'bruno') addHeat(g, HEAT_FOR.runOver, ev.ped.x, ev.ped.y);
         break;
       }
       case 'crash':
