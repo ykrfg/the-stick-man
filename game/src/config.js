@@ -103,6 +103,25 @@ export const CRASH_DAMAGE = { mover: 21, struck: 34, wall: 40 };
  */
 export const CRASH_GRACE = 0.8;
 
+/**
+ * Muzzle flash life, in seconds: one bright beat at the gun tip when the
+ * player fires — long enough to read as a shot, gone before it can smear
+ * across frames. Live fire only; nothing fires in the ?shot= scenes.
+ */
+export const MUZZLE_FLASH_TIME = 0.055;
+
+/**
+ * A wreck's afterlife, in seconds of game time. A car beaten to hp <= 0
+ * catches fire — flickering flames and rising smoke, purely visual: the
+ * fire damages nothing and blocks nothing the wreck itself didn't. The
+ * flames die down over the burn's last seconds; once the fire is out the
+ * dead car sinks away over `fade` and leaves the world, clearing the
+ * lane it blocked. Mission-critical cars — the REPO JOB's gold car and
+ * the COURIER HIT car, while their mission is active — burn the same
+ * way but are NEVER removed: the mission still needs them in the world.
+ */
+export const WRECK_BURN = { burn: 40, fade: 3.5 };
+
 export const SAVE_KEY = 'the-stick-man-save-v1';
 
 /**
