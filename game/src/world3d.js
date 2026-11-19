@@ -586,16 +586,19 @@ export function buildWorld(scene, city) {
 /**
  * A mission marker: a translucent beam of light with a bobbing label sprite.
  * The owner positions the group and toggles visibility; update spins it gently.
+ * The options exist for the secondary diner marker: a shorter column in its
+ * own colour so it can never be mistaken for the objective. Defaults are
+ * exactly the objective marker's dimensions.
  */
-export function makeMarker(colorHex = 0xffcf3f, label = '!') {
+export function makeMarker(colorHex = 0xffcf3f, label = '!', { height = 110, spriteColor = '#ffd94d', spriteScale = 1.15 } = {}) {
   const group = new THREE.Group();
   const beam = new THREE.Mesh(
-    new THREE.CylinderGeometry(15, 15, 110, 18, 1, true),
+    new THREE.CylinderGeometry(15, 15, height, 18, 1, true),
     new THREE.MeshBasicMaterial({
       color: colorHex, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false,
     }),
   );
-  beam.position.y = 55;
+  beam.position.y = height / 2;
   group.add(beam);
   const disc = new THREE.Mesh(
     new THREE.CircleGeometry(15, 22),
@@ -607,12 +610,13 @@ export function makeMarker(colorHex = 0xffcf3f, label = '!') {
   disc.rotation.x = -Math.PI / 2;
   disc.position.y = 0.95;
   group.add(disc);
-  const sprite = makeTextSprite(label, { size: 64, color: '#ffd94d', scale: 1.15 });
-  sprite.position.y = 122;
+  const spriteY = height + 12;
+  const sprite = makeTextSprite(label, { size: 64, color: spriteColor, scale: spriteScale });
+  sprite.position.y = spriteY;
   group.add(sprite);
   group.userData.update = (time) => {
     beam.rotation.y = time * 0.8;
-    sprite.position.y = 122 + Math.sin(time * 2.2) * 5;
+    sprite.position.y = spriteY + Math.sin(time * 2.2) * 5;
   };
   return group;
 }

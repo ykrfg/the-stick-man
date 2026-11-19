@@ -82,6 +82,7 @@ const g = {
   toast: null,
   prompt: '',
   aimAngle: null,
+  aimPoint: null,
   transition: null,
   garageT: 0,
   robbery: null, // { shop, t } while a hold-up is being stood through
@@ -105,6 +106,7 @@ const g = {
   cam: {
     init: false, yaw: 0, pitch: 0.42, dist: 250, zoomIdx: 2,
     manualT: 99, collDist: 1e9, backBlend: 0, lookBack: false, occluded: false,
+    rescue: 0,
   },
   say(title, sub = '', dur = 3.4) {
     g.message = { title, sub, t: dur, dur };
@@ -801,7 +803,12 @@ function handleInteract() {
   }
 }
 
-/** Where the mouse is pointing in the world (for aiming), as an angle or null. */
+/**
+ * Where the mouse is pointing in the world (for aiming), as an angle or
+ * null. The ground point itself is kept in g.aimPoint: a click lands on a
+ * figure's body long before it lands on his feet, so the ground point is
+ * what "near the click" means when combat looks for an enemy to face.
+ */
 function computeAimAngle() {
   const p = g.player;
   const ndc = new THREE.Vector2(
@@ -811,10 +818,11 @@ function computeAimAngle() {
   const ray = new THREE.Raycaster();
   ray.setFromCamera(ndc, camera);
   const { origin, direction } = ray.ray;
-  if (direction.y > -0.05) return null;
+  if (direction.y > -0.05) { g.aimPoint = null; return null; }
   const t = -origin.y / direction.y;
   const wx = origin.x + direction.x * t;
   const wz = origin.z + direction.z * t;
+  g.aimPoint = { x: wx, z: wz };
   return Math.atan2(wz - p.y, wx - p.x);
 }
 
@@ -887,6 +895,7 @@ function seatCamera() {
   cam.yaw = facing + Math.PI;
   cam.dist = ZOOM_STEPS[cam.zoomIdx] * (inCar ? 1.2 : 1);
   cam.collDist = cam.dist;
+  cam.rescue = 0;
   cam.backBlend = 0;
   cam.init = true;
   const cp0 = Math.cos(cam.pitch);
@@ -982,26 +991,51 @@ function updateCamera(dt) {
   cam.dist += (distTarget - cam.dist) * (1 - Math.exp(-6 * dt));
 
   const yawEff = cam.yaw + Math.PI * cam.backBlend;
-  const cp = Math.cos(cam.pitch);
-  const dir = { x: Math.cos(yawEff) * cp, y: Math.sin(cam.pitch), z: Math.sin(yawEff) * cp };
 
   // Building collision: the camera may never have a building between itself
-  // and the hero. Pull in instantly, ease back out slowly — no popping.
-  const hitT = rayBuildingT(anchor.x, anchor.y, anchor.z, dir.x, dir.y, dir.z, cam.dist);
+  // and the hero. Pull in instantly, ease back out — no popping.
+  //
+  // Pitch rescue: the pull-in alone has no floor, so with a wall anywhere
+  // near the hero's back the camera collapsed to the bare gap (measured:
+  // 21 units with the hero 25 from a wall, 7 hugging it) whatever zoom step
+  // was chosen, and the screen filled with wall. So when the ray at the
+  // player's pitch would force the camera closer than the floor (a fixed
+  // fraction of the chosen distance), trade pitch for distance instead: a
+  // steeper ray meets the same wall later in slant range (and clears low
+  // roofs outright), so the camera stays back and looks down over the hero
+  // with the surroundings readable. The rescue amount eases in and out
+  // (cam.rescue), the search runs only while blocked, and the collision
+  // test always runs at the pitch actually rendered — so the no-clip
+  // guarantee holds at every step of the ease, with the hard clamp below
+  // still standing as the final backstop.
+  const floorDist = Math.max(48, cam.dist * 0.35);
+  const hitAt = (pitch) => {
+    const c = Math.cos(pitch);
+    return rayBuildingT(anchor.x, anchor.y, anchor.z,
+      Math.cos(yawEff) * c, Math.sin(pitch), Math.sin(yawEff) * c, cam.dist);
+  };
+  let rescueT = 0;
+  if (hitAt(cam.pitch) < floorDist + 6) {
+    rescueT = 0.9; // best effort: the steepest candidate still buys distance
+    for (const extra of [0.3, 0.55, 0.9]) {
+      if (hitAt(Math.min(1.32, cam.pitch + extra)) >= floorDist + 6) { rescueT = extra; break; }
+    }
+  }
+  // Rise fast (the dip before it bites is a frame or two), release slower
+  // so skirting a wall does not sawtooth the view pitch.
+  const rescueRate = rescueT > cam.rescue ? 12 : 6;
+  cam.rescue += (rescueT - cam.rescue) * (1 - Math.exp(-rescueRate * dt));
+  if (Math.abs(cam.rescue - rescueT) < 0.01) cam.rescue = rescueT;
+  const pitchEff = Math.min(1.32, cam.pitch + cam.rescue);
+  const hitT = hitAt(pitchEff);
   // Stay a margin in front of the blocker; when the hero hugs a wall the
   // clearance is only a few units, so the floor scales with the hit distance
   // instead of overshooting into the building.
   const allowed = hitT === Infinity ? cam.dist : (hitT > 14 ? hitT - 6 : Math.max(6, hitT * 0.55));
   if (allowed < cam.collDist) cam.collDist = allowed;
-  else cam.collDist += (allowed - cam.collDist) * (1 - Math.exp(-3.5 * dt));
+  else cam.collDist += (allowed - cam.collDist) * (1 - Math.exp(-5.5 * dt));
   const effDist = Math.min(cam.dist, cam.collDist);
-
-  // Close-quarters fallback: when collision has pulled the camera right in,
-  // raise it toward a top-down view so the hero and his surroundings stay
-  // readable instead of the screen filling with the wall that blocked it.
-  const lift = effDist < 70 ? (1 - effDist / 70) * 0.55 : 0;
-  cam.lift = lift;
-  const pitchEff = Math.min(1.35, cam.pitch + lift);
+  cam.lift = pitchEff - cam.pitch;
   const cpE = Math.cos(pitchEff);
   const dirE = { x: Math.cos(yawEff) * cpE, y: Math.sin(pitchEff), z: Math.sin(yawEff) * cpE };
 
@@ -1229,6 +1263,7 @@ function frame(now) {
       }
       if (input.tapped('KeyE')) handleInteract();
       g.aimAngle = p.state === 'foot' ? computeAimAngle() : null;
+      if (p.state !== 'foot') g.aimPoint = null;
       updateTraffic(g, wdt);
       updatePeds(g, wdt, g.time);
       updateCombat(g, wdt);

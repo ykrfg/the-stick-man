@@ -673,20 +673,60 @@ export function updateTraffic(g, dt) {
       spawnTrafficCar(g);
       continue;
     }
-    let targetSpeed = CAR.trafficSpeed;
+    // --- Passing a stationary obstacle --------------------------------
+    // Parked cars sit at the kerb 41 from the road centre — 15 from the
+    // lane line, permanently inside the car-ahead corridor below — and
+    // they never move. Measured consequence: every traffic car that came
+    // up behind one stopped 52 short and waited forever, and the queues
+    // behind them are the jam in the user's screenshot. Real drivers
+    // edge around a kerbside car, so: when the obstacle ahead is a
+    // stationary car that is not live traffic (parked, wrecked, a
+    // cruiser holding its stop, a courier at a standstill), ease
+    // laterally away from it far enough to restore the corridor gap,
+    // pass, and ease back. Live traffic ahead is never passed this way
+    // — queueing behind it is the traffic-probe behaviour — and
+    // pedestrians never take part: their yield below stays absolute.
+    car.off ??= 0; car.blockedT ??= 0; car.creepT ??= 0;
+    const latOf = (o) => (car.axis === 'y' ? o.x : o.y);
+    const alongOf = (o) => (car.axis === 'y' ? (o.y - car.y) * car.dir : (o.x - car.x) * car.dir);
+    let offTarget = 0;
+    {
+      let bestAlong = 170;
+      for (const other of g.cars) {
+        if (other === car || other.occupant === 'player') continue;
+        if (Math.abs(other.speed ?? 0) >= 5) continue;
+        if (other.kind === 'traffic' && !other.wrecked) continue;
+        const along = alongOf(other);
+        if (along < -20 || along > bestAlong) continue;
+        const gap = latOf(other) - car.lane; // signed: which side it sits
+        if (Math.abs(gap) >= 40) continue;
+        bestAlong = along;
+        const away = gap > 0 ? -1 : gap < 0 ? 1 : (car.lane > car.road ? -1 : 1);
+        const cap = car.creepT > 0 ? 40 : 24;
+        offTarget = away * Math.min(cap, Math.max(0, 37 - Math.abs(gap)));
+      }
+    }
+    car.off += (offTarget - car.off) * (1 - Math.exp(-6 * dt));
+    if (offTarget === 0 && Math.abs(car.off) < 0.05) car.off = 0;
+    const myLat = car.lane + car.off;
+
     // A car ahead in my path slows us down. The corridor is wider than
     // my lane on purpose: a car CROSSING my path at an intersection
     // (laterally near my lane line while it passes) counts too, so
     // traffic brakes for a crossing car instead of driving into its
     // flank and merging with it at the corner.
+    let carTarget = CAR.trafficSpeed;
+    let blocker = null;
     for (const other of g.cars) {
       if (other === car) continue;
-      const lateral = car.axis === 'y' ? other.x - car.lane : other.y - car.lane;
-      const along = car.axis === 'y' ? (other.y - car.y) * car.dir : (other.x - car.x) * car.dir;
+      const lateral = latOf(other) - myLat;
+      const along = alongOf(other);
       if (Math.abs(lateral) < 34 && along > 0 && along < 80) {
-        targetSpeed = Math.min(targetSpeed, Math.max(0, (along - 52) * 4));
+        const t = Math.max(0, (along - 52) * 4);
+        if (t < carTarget) { carTarget = t; blocker = other; }
       }
     }
+    let targetSpeed = carTarget;
     // Pedestrians in the path get the same courtesy, on a braking
     // curve: the target speed is the fastest speed from which this car
     // can still stop TRAFFIC_YIELD.gap short of the person, so it eases
@@ -699,18 +739,56 @@ export function updateTraffic(g, dt) {
     // already on top of someone at speed can still clip them; the
     // curve only promises a stop when there was road to stop in.
     // Police in pursuit and the courier never run this code.
+    let pedTarget = CAR.trafficSpeed;
     const yieldFor = (px, py) => {
-      const lateral = car.axis === 'y' ? px - car.lane : py - car.lane;
+      const lateral = (car.axis === 'y' ? px : py) - myLat;
       if (Math.abs(lateral) >= TRAFFIC_YIELD.corridor) return;
       const along = car.axis === 'y' ? (py - car.y) * car.dir : (px - car.x) * car.dir;
       if (along <= 0 || along > TRAFFIC_YIELD.range) return;
       const t = Math.sqrt(2 * TRAFFIC_YIELD.brake * Math.max(0, along - TRAFFIC_YIELD.gap));
-      if (t < targetSpeed) targetSpeed = t;
+      if (t < pedTarget) pedTarget = t;
     };
     if (g.player.state === 'foot') yieldFor(g.player.x, g.player.y);
     for (const ped of g.peds) {
       if (ped.state === 'down' || ped.state === 'inCar') continue;
       yieldFor(ped.x, ped.y);
+    }
+    targetSpeed = Math.min(targetSpeed, pedTarget);
+
+    // --- Patience: a car-yield that expires into a slow creep ----------
+    // Two traffic cars can also stop each other dead at a junction
+    // corner, each waiting for the other to clear a corridor neither
+    // can enter first; and an obstacle the kerb pass cannot fully clear
+    // (a wreck mid-lane) waits forever the same way. So a car held by a
+    // STOPPED car accrues patience, and past its (staggered) threshold
+    // it creeps at walking pace for a few seconds: stopped-car braking
+    // is ignored while creeping, but moving cars still stop it, the
+    // player's car still stops it, and every pedestrian still stops it
+    // cold — patience never accrues while a person is the blocker, and
+    // the creep target is minned with the pedestrian yield every frame.
+    // The car that has waited longest moves first; the other's blocker
+    // is then a moving car, its patience resets, and it waits its turn.
+    const heldByCar = blocker !== null && Math.abs(blocker.speed ?? 0) < 5
+      && blocker.occupant !== 'player' && blocker !== g.player.car
+      && carTarget < 20 && car.speed < 8 && pedTarget >= 20;
+    car.blockedT = heldByCar ? car.blockedT + dt : 0;
+    car.creepDelay ??= 4.5 + (Math.abs(Math.round(car.x + car.y)) % 3) * 1.1;
+    if (car.creepT > 0) car.creepT -= dt;
+    if (car.creepT <= 0 && car.blockedT > car.creepDelay) { car.creepT = 5; car.blockedT = 0; }
+    if (car.creepT > 0) {
+      let creepTarget = 45;
+      for (const other of g.cars) {
+        if (other === car) continue;
+        const stopped = Math.abs(other.speed ?? 0) < 5;
+        const playerCar = other.occupant === 'player' || other === g.player.car;
+        if (stopped && !playerCar) continue;
+        const lateral = latOf(other) - myLat;
+        const along = alongOf(other);
+        if (Math.abs(lateral) < 34 && along > 0 && along < 80) {
+          creepTarget = Math.min(creepTarget, Math.max(0, (along - 52) * 4));
+        }
+      }
+      targetSpeed = Math.min(creepTarget, pedTarget);
     }
     car.speed += Math.max(-260 * dt, Math.min(200 * dt, targetSpeed - car.speed));
     const along = (car.axis === 'y' ? car.y : car.x) + car.dir * car.speed * dt;
@@ -724,6 +802,7 @@ export function updateTraffic(g, dt) {
       if (Math.abs(pos - cross) < Math.abs(car.speed * dt) + 3 && car.turnCd <= 0) {
         car.turnCd = 1.2;
         if (g.rng.chance(0.38)) {
+          car.off = 0; car.blockedT = 0; car.creepT = 0; // a new lane, a fresh start
           const newDir = g.rng.chance(0.5) ? 1 : -1;
           const crossRoad = cross;
           if (car.axis === 'y') {
@@ -744,9 +823,10 @@ export function updateTraffic(g, dt) {
         }
       }
     }
-    // Keep the lateral position glued to the lane, and stay in the world.
-    if (car.axis === 'y') car.x = car.lane;
-    else car.y = car.lane;
+    // Keep the lateral position glued to the lane (plus the passing
+    // offset, while one is in play), and stay in the world.
+    if (car.axis === 'y') car.x = car.lane + car.off;
+    else car.y = car.lane + car.off;
     if (car.x < 40 || car.x > WORLD.width - 40 || car.y < 40 || car.y > WORLD.height - 40) {
       removeCar(g, car);
       spawnTrafficCar(g);
@@ -800,13 +880,13 @@ function separateTrafficCars(g) {
         const bPush = Math.min(overlap / 2, 18);
         b.x -= nx * bPush;
         b.y -= ny * bPush;
-        if (b.axis === 'y') b.x = b.lane;
-        else b.y = b.lane;
+        if (b.axis === 'y') b.x = b.lane + (b.off ?? 0);
+        else b.y = b.lane + (b.off ?? 0);
         resolveCircleCollision(g.city, b, CAR.radius);
         syncCarMesh(b, 0);
       }
-      if (a.axis === 'y') a.x = a.lane;
-      else a.y = a.lane;
+      if (a.axis === 'y') a.x = a.lane + (a.off ?? 0);
+      else a.y = a.lane + (a.off ?? 0);
       resolveCircleCollision(g.city, a, CAR.radius);
       syncCarMesh(a, 0);
     }

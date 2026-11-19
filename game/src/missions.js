@@ -59,6 +59,35 @@ export function missionsInit(g) {
   g.markerGold.visible = false;
   g.markerRed.visible = false;
   g.scene.add(g.markerGold, g.markerRed);
+  // The diner marker: a persistent SECONDARY marker for Bruno's Diner,
+  // independent of the objective — shorter column, its own orange, and a
+  // DINER tag instead of the objective's "!". Home base stays findable
+  // mid-mission; syncDinerMarker below owns its visibility (it steps
+  // aside whenever the objective itself is Bruno/the diner, and it never
+  // appears in ?shot= scenes).
+  g.markerDiner = makeMarker(0xff9f43, t('marker.diner'), { height: 58, spriteColor: '#ffb25e', spriteScale: 0.95 });
+  const dinerSpot = g.city.landmarks.diner;
+  g.markerDiner.position.set(dinerSpot.x, 0, dinerSpot.y);
+  g.markerDiner.visible = false;
+  g.scene.add(g.markerDiner);
+}
+
+/**
+ * The diner marker's one visibility rule, applied every frame: shown
+ * whenever play is live and the current objective is somewhere else.
+ * When the objective target IS Bruno/the diner (waiting for work, the
+ * return leg), the gold marker there already says it — showing both
+ * would double up on the same doorstep. In ?shot= mode the marker stays
+ * hidden so the deterministic scenes render exactly as before.
+ */
+function syncDinerMarker(g, time) {
+  const d = g.markerDiner;
+  if (!d) return;
+  d.userData.update(time);
+  if (g.shotMode) { d.visible = false; return; }
+  const L = g.city.landmarks;
+  const target = objectiveTarget(g);
+  d.visible = !(target && Math.hypot(target.x - L.diner.x, target.y - L.diner.y) < 90);
 }
 
 export function missionAvailable(g) {
@@ -591,6 +620,7 @@ export function updateMissions(g, dt, time) {
   const m = g.mission;
   g.markerGold.userData.update(time);
   g.markerRed.userData.update(time);
+  syncDinerMarker(g, time);
   if (!m.active) {
     if (g.job.active) {
       updateJob(g);

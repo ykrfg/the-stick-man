@@ -83,6 +83,33 @@ export function spawnCashPickup(g, x, y, amount) {
   g.pickups.push({ x, y, amount, mesh, seed: g.rng.range(0, 10) });
 }
 
+/**
+ * The nearest living hostile to a clicked ground point, or null. The
+ * search radius grows with the click's range: a figure's body projects
+ * past his feet along the view ray, and the overshoot grows with distance
+ * (measured: a chest click on a man 180 away lands ~84 past him, a head
+ * click ~170), so a fixed radius either misses honest clicks at range or
+ * swallows the whole street up close. Only hostiles the player could
+ * actually hit count — in front of him, inside bullet range.
+ */
+function nearestHostile(g, x, z) {
+  const p = g.player;
+  const aimDist = Math.hypot(x - p.x, z - p.y);
+  let best = null;
+  let bestD = Math.min(240, 90 + aimDist * 0.35);
+  for (const ped of g.peds) {
+    if (ped.state === 'down' || ped.state === 'inCar') continue;
+    if (ped.role !== 'rival' && ped.role !== 'cop') continue;
+    const rx = ped.x - p.x;
+    const ry = ped.y - p.y;
+    if (Math.hypot(rx, ry) > PLAYER.bulletRange + 40) continue;
+    if (rx * (x - p.x) + ry * (z - p.y) <= 0) continue; // behind the player
+    const d = Math.hypot(ped.x - x, ped.y - z);
+    if (d < bestD) { bestD = d; best = ped; }
+  }
+  return best;
+}
+
 /** Fire one bullet from the player's hand toward the player's facing. */
 function fireBullet(g) {
   const p = g.player;
@@ -185,7 +212,19 @@ export function updateCombat(g, dt) {
   if (p.hasPistol && wantsFire && p.shotCd <= 0) {
     p.shotCd = PLAYER.shotCooldown;
     p.aimT = 0.4;
-    if (g.input.mouse.down && g.aimAngle !== null) p.angle = g.aimAngle;
+    if (g.input.mouse.down) {
+      // Click-to-face: if an enemy stands at (or near) the clicked point,
+      // face HIM, not the bare ground point. A click lands on a figure's
+      // body, whose ground projection falls a good way past his feet, so
+      // aiming at the point itself walks shots past the man the player
+      // clicked on. The snap happens on this very press, before the
+      // bullet spawns, so the shot goes at the enemy — never a beat late.
+      // Hostiles are the game's own fighters (rivals and officers); a
+      // click on empty ground keeps the plain ground-point aim, untouched.
+      const foe = g.aimPoint ? nearestHostile(g, g.aimPoint.x, g.aimPoint.z) : null;
+      if (foe) p.angle = Math.atan2(foe.y - p.y, foe.x - p.x);
+      else if (g.aimAngle !== null) p.angle = g.aimAngle;
+    }
     fireBullet(g);
     p.fig.setExpression('shout');
     p.exprT = 0.3;

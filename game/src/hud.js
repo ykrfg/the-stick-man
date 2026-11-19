@@ -142,6 +142,19 @@ function drawMinimap(g, ctx) {
     dot(lm.pd.x, lm.pd.y, 3.4, '#5aa2ff');
     dot(lm.pd.x, lm.pd.y, 1.4, '#ffffff');
   }
+  // Bruno's Diner: a permanent secondary blip in the diner marker's
+  // orange, so home base is on the map even mid-mission. Drawn before
+  // the gold dots below so they win when they share the spot, and
+  // skipped entirely when the objective marker stands at the diner or
+  // Bruno's work dot is about to (the gold says it, once). Never in
+  // ?shot= mode: the screenshot scenes keep the map they always had.
+  const objectiveMarker = g.markerGold.visible ? g.markerGold : g.markerRed.visible ? g.markerRed : null;
+  const objectiveAtDiner = objectiveMarker !== null && lm.diner
+    && Math.hypot(objectiveMarker.position.x - lm.diner.x, objectiveMarker.position.z - lm.diner.y) < 90;
+  const brunoWorkDot = !g.mission.active && (missionAvailable(g) || jobAvailable(g));
+  if (lm.diner && !g.shotMode && !objectiveAtDiner && !brunoWorkDot) {
+    dot(lm.diner.x, lm.diner.y, 3.4, '#ff9f43');
+  }
   // Bruno, when he has work (a story job, or odd jobs in free roam).
   if (!g.mission.active && (missionAvailable(g) || jobAvailable(g))) {
     const b = g.city.landmarks.diner;
