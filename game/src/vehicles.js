@@ -4,7 +4,7 @@
 // network lane by lane, the player's arcade driving, and the shared collision
 // resolution (buildings, other cars, pedestrians) that police cars reuse.
 import * as THREE from 'three';
-import { CAR, COURIER_HP, CRASH_DAMAGE, CRASH_GRACE, PLAYER, ROAD, TRAFFIC_WARN, TRAFFIC_YIELD, WORLD } from './config.js';
+import { CAR, COURIER_HP, CRASH_DAMAGE, CRASH_GRACE, PLAYER, ROAD, TRAFFIC_WARN, TRAFFIC_YIELD, WORLD, WRECK_BURN } from './config.js';
 import { clampToWorld, resolveCircleCollision } from './city.js';
 import { toonMat, basicMat } from './stick3d.js';
 
@@ -97,6 +97,13 @@ function baseCar(kind, x, y, angle, colorHex) {
     // to hp <= 0 while the player drove it: it never moves again.
     touched: false,
     wrecked: false,
+    // Wreck afterlife (updateWrecks): seconds spent burning, the fire
+    // effect group while it burns, and how far the dead car has sunk
+    // while it fades away. None of it is saved — wrecks are world state,
+    // never progress.
+    burnT: 0,
+    fireFx: null,
+    sinkY: 0,
     // Crash-encounter record (player's car only, written by moveFreeCar):
     // the partner whose crash impact last damaged this car, and the
     // window during which that same partner cannot damage it again.
@@ -131,8 +138,10 @@ export function syncCarMesh(car, dt) {
   if (!Number.isFinite(car.speed)) car.speed = 0;
   if (!Number.isFinite(car.lean)) car.lean = 0;
   if (!Number.isFinite(car.drift)) car.drift = 0;
-  // A wreck sits low and tilted, so it reads as a dead car, not a good one.
-  car.mesh.position.set(car.x, car.wrecked ? -1.4 : 0, car.y);
+  // A wreck sits low and tilted, so it reads as a dead car, not a good
+  // one — and lower still while it sinks away at the end of its burn
+  // (sinkY is updateWrecks' doing; every sync path honours it).
+  car.mesh.position.set(car.x, (car.wrecked ? -1.4 : 0) - (car.sinkY ?? 0), car.y);
   car.mesh.rotation.y = -car.angle;
   car.mesh.rotation.x = car.wrecked ? 0 : car.lean;
   car.mesh.rotation.z = car.wrecked ? 0.07 : 0;
@@ -319,6 +328,10 @@ export function wreckCar(g, car) {
   car.speed = 0;
   car.shoveX = 0;
   car.shoveY = 0;
+  // The burn starts now: updateWrecks raises the flames on its next
+  // pass and runs the wreck's whole afterlife from this clock.
+  car.burnT = 0;
+  car.sinkY = 0;
   syncCarMesh(car, 0);
 }
 
@@ -354,6 +367,168 @@ export function crashDamageCar(g, car, amount) {
   if (g.time < (car.crashGraceUntil ?? 0)) return;
   car.crashGraceUntil = g.time + CRASH_GRACE;
   damageCar(g, car, amount);
+}
+
+// --- Wreck fire ---------------------------------------------------------
+// A wreck burns so "destroyed" reads at a glance, then leaves the world
+// so a dead car cannot block a lane forever. The whole show is sprites
+// and timing — the fire deals no damage, applies no heat, and touches no
+// mission, police or save state. Two shared canvas textures (a flame
+// blob, a smoke puff) serve every wreck; each burning car owns only its
+// sprite materials, created when it catches and disposed when the fire
+// goes out. Animation is analytic in g.time, so nothing allocates and
+// nothing drifts per frame.
+
+let flameTexture = null;
+let smokeTexture = null;
+
+/** The two shared fire textures, drawn once: flame blob and smoke puff. */
+function fireTextures() {
+  if (flameTexture) return { flameTexture, smokeTexture };
+  const fc = document.createElement('canvas');
+  fc.width = 64;
+  fc.height = 64;
+  const fx = fc.getContext('2d');
+  const fg = fx.createRadialGradient(32, 40, 2, 32, 34, 30);
+  fg.addColorStop(0, 'rgba(255,244,200,1)');
+  fg.addColorStop(0.3, 'rgba(255,196,64,0.95)');
+  fg.addColorStop(0.65, 'rgba(255,110,32,0.55)');
+  fg.addColorStop(1, 'rgba(255,80,20,0)');
+  fx.fillStyle = fg;
+  fx.beginPath();
+  fx.arc(32, 34, 30, 0, Math.PI * 2);
+  fx.fill();
+  flameTexture = new THREE.CanvasTexture(fc);
+  const sc = document.createElement('canvas');
+  sc.width = 64;
+  sc.height = 64;
+  const sx = sc.getContext('2d');
+  const sg = sx.createRadialGradient(32, 32, 2, 32, 32, 30);
+  sg.addColorStop(0, 'rgba(255,255,255,0.85)');
+  sg.addColorStop(0.6, 'rgba(255,255,255,0.4)');
+  sg.addColorStop(1, 'rgba(255,255,255,0)');
+  sx.fillStyle = sg;
+  sx.beginPath();
+  sx.arc(32, 32, 30, 0, Math.PI * 2);
+  sx.fill();
+  smokeTexture = new THREE.CanvasTexture(sc);
+  return { flameTexture, smokeTexture };
+}
+
+/** Raise a wreck's fire: three flames along the body, four smoke puffs. */
+function makeFireFx(g, car) {
+  const { flameTexture: fTex, smokeTexture: sTex } = fireTextures();
+  const group = new THREE.Group();
+  const flames = [];
+  for (const d of [{ x: -13, y: 15, s: 17 }, { x: 1, y: 18, s: 22 }, { x: 13, y: 14, s: 15 }]) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: fTex, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, opacity: 0.95,
+    }));
+    sp.position.set(d.x, d.y, 0);
+    sp.scale.set(d.s, d.s * 1.3, 1);
+    sp.renderOrder = 940;
+    group.add(sp);
+    flames.push({ sp, base: d.s, y: d.y });
+  }
+  const smokes = [];
+  for (let i = 0; i < 4; i += 1) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: sTex, color: 0x35353c, transparent: true, depthWrite: false, opacity: 0,
+    }));
+    sp.renderOrder = 939;
+    group.add(sp);
+    smokes.push({ sp, phase: i / 4 });
+  }
+  group.position.set(car.x, 0, car.y);
+  group.rotation.y = -car.angle;
+  g.scene.add(group);
+  // A fixed per-car seed from where it died — no rng draws, so the fire
+  // can never perturb the seeded sequences anything else relies on.
+  return { group, flames, smokes, seed: Math.abs(car.x * 0.371 + car.y * 0.733) % 10 };
+}
+
+/** Put a wreck's fire out and free its sprite materials. */
+function removeFireFx(g, car) {
+  const fx = car.fireFx;
+  if (!fx) return;
+  g.scene.remove(fx.group);
+  for (const f of fx.flames) f.sp.material.dispose();
+  for (const s of fx.smokes) s.sp.material.dispose();
+  car.fireFx = null;
+}
+
+/**
+ * Mission-critical cars — the REPO JOB's gold car and the COURIER HIT
+ * car, while their mission is active — burn but are never removed: the
+ * mission still points at them, and a despawn would soft-lock it. The
+ * references live on g.mission and are cleared by the mission itself
+ * when the car stops being its business (delivered, taken, cleaned up).
+ */
+function isMissionCritical(g, car) {
+  const m = g.mission;
+  return !!(m && m.active && (m.targetCar === car || m.courier === car));
+}
+
+/**
+ * Run every wreck's afterlife for one frame: flames up while it burns,
+ * dying down at the end of WRECK_BURN.burn, then the sink and removal
+ * over WRECK_BURN.fade — except mission-critical wrecks and any wreck
+ * still occupied, which stay in the world as plain wrecks. A traffic
+ * wreck that leaves is replaced off-screen, the same bargain
+ * updateTraffic makes when it despawns a distant car.
+ */
+export function updateWrecks(g, dt) {
+  for (const car of [...g.cars]) {
+    if (!car.wrecked) {
+      // Back from the dead (the REPO JOB quietly repairs its target car
+      // if it is wrecked before being taken): the fire goes out with
+      // the wreck state, and any sink is undone.
+      if (car.fireFx) removeFireFx(g, car);
+      if (car.sinkY) {
+        car.sinkY = 0;
+        syncCarMesh(car, 0);
+      }
+      continue;
+    }
+    car.burnT = (car.burnT ?? 0) + dt;
+    if (car.burnT < WRECK_BURN.burn) {
+      if (!car.fireFx) car.fireFx = makeFireFx(g, car);
+      const fx = car.fireFx;
+      fx.group.position.set(car.x, 0, car.y);
+      fx.group.rotation.y = -car.angle;
+      // The fire dies down over its last four seconds.
+      const dieDown = Math.min(1, (WRECK_BURN.burn - car.burnT) / 4);
+      fx.flames.forEach((f, i) => {
+        const flick = 0.82 + 0.28 * Math.sin(g.time * 23 + fx.seed * 7 + i * 2.3) * Math.sin(g.time * 9.1 + i * 1.7);
+        const s = f.base * flick * Math.max(0.12, dieDown);
+        f.sp.scale.set(s, s * 1.3, 1);
+        f.sp.material.opacity = 0.95 * Math.max(0.15, dieDown);
+        f.sp.position.y = f.y + Math.sin(g.time * 13 + i * 2.0) * 1.2;
+      });
+      fx.smokes.forEach((s, i) => {
+        const cyc = (g.time * 0.14 + s.phase + fx.seed * 0.05) % 1; // ~7 s rise
+        s.sp.position.set(
+          Math.sin(fx.seed * 9 + i * 2.4) * 6 + cyc * 10,
+          24 + cyc * 52,
+          Math.cos(fx.seed * 7 + i) * 5,
+        );
+        const sc = 12 + cyc * 26;
+        s.sp.scale.set(sc, sc, 1);
+        s.sp.material.opacity = 0.34 * Math.sin(Math.min(1, cyc) * Math.PI) * Math.min(1, dieDown + 0.25);
+      });
+      continue;
+    }
+    // The fire is out.
+    if (car.fireFx) removeFireFx(g, car);
+    if (isMissionCritical(g, car) || car.occupant) continue; // stays a plain wreck
+    car.sinkY = Math.min(1, (car.burnT - WRECK_BURN.burn) / WRECK_BURN.fade) * 27;
+    syncCarMesh(car, 0);
+    if (car.burnT >= WRECK_BURN.burn + WRECK_BURN.fade) {
+      const replace = car.kind === 'traffic' && !car.touched;
+      removeCar(g, car);
+      if (replace) spawnTrafficCar(g);
+    }
+  }
 }
 
 /**

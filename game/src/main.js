@@ -13,7 +13,7 @@ import { clearSave, hasProgress, loadSave, storeSave } from './save.js';
 import { buildCity } from './city.js';
 import { buildWorld } from './world3d.js';
 import { createFigure } from './stick3d.js';
-import { computeTrafficWarnings, damageCar, drivePlayerCar, spawnParkedCars, spawnTrafficCar, updatePlayerCarHits, updateTraffic } from './vehicles.js';
+import { computeTrafficWarnings, damageCar, drivePlayerCar, spawnParkedCars, spawnTrafficCar, updatePlayerCarHits, updateTraffic, updateWrecks } from './vehicles.js';
 import { runOverPed, seatDriverFigure, spawnPeds, syncFigure, updatePeds, updatePlayerOnFoot } from './people.js';
 import { spawnCashPickup, updateBullets, updateCombat, updatePickups } from './combat.js';
 import { addHeat, updatePolice } from './police.js';
@@ -1265,6 +1265,7 @@ function frame(now) {
       g.aimAngle = p.state === 'foot' ? computeAimAngle() : null;
       if (p.state !== 'foot') g.aimPoint = null;
       updateTraffic(g, wdt);
+      updateWrecks(g, wdt);
       updatePeds(g, wdt, g.time);
       updateCombat(g, wdt);
       updateBullets(g, wdt);

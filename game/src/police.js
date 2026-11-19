@@ -218,7 +218,14 @@ export function updatePolice(g, dt, time) {
   const policeCars = g.cars.filter((c) => c.kind === 'police' && !c.touched && c.occupant !== 'player');
   const desired = g.stars === 0 ? 0 : Math.min(4, g.stars);
   g.policeSpawnCd -= dt;
-  if (policeCars.length < desired && g.policeSpawnCd <= 0) {
+  // A wrecked unit is out of the response: it burns where it died until
+  // the wreck system sinks it away, and it must not count toward the
+  // fleet — otherwise a street littered with burned-out cruisers would
+  // mute the next response entirely. (It stays in policeCars for the
+  // loop below — lights, and stopped-car bust pressure — exactly as a
+  // wrecked unit behaved while the heat was up before.)
+  const activeUnits = policeCars.reduce((n, c) => n + (c.wrecked ? 0 : 1), 0);
+  if (activeUnits < desired && g.policeSpawnCd <= 0) {
     const point = spawnPoint(g);
     if (point) {
       spawnPoliceCar(g, point.x, point.y);
@@ -228,9 +235,10 @@ export function updatePolice(g, dt, time) {
   for (const car of policeCars) {
     if (g.stars === 0) {
       if (car.wrecked) {
-        // A wrecked unit cannot drive off; the city tows it once the
-        // heat is gone. (Player-owned wrecks never reach this filter.)
-        removeCar(g, car);
+        // A wrecked unit cannot drive off. It burns where it died and
+        // the wreck system (updateWrecks in vehicles.js) sinks it away
+        // once the fire is out — no instant tow-away pop the moment the
+        // heat clears. (Player-owned wrecks never reach this filter.)
         continue;
       }
       // The heat is gone: drive off and despawn in the distance.
