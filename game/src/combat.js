@@ -4,7 +4,7 @@
 // or the speakers directly. The punch lands a beat after the swing starts, when
 // the strike of the animation lands.
 import * as THREE from 'three';
-import { PLAYER } from './config.js';
+import { MUZZLE_FLASH_TIME, PLAYER } from './config.js';
 import { buildingAt } from './city.js';
 import { hurtPed } from './people.js';
 import { damageCar } from './vehicles.js';
@@ -110,6 +110,81 @@ function nearestHostile(g, x, z) {
   return best;
 }
 
+// --- Muzzle flash -------------------------------------------------------
+// One shared flash, built lazily on the first shot and reused for every
+// shot after: a starburst sprite at the gun tip plus a point light that
+// pulses with it. It lives only while a shot is live (MUZZLE_FLASH_TIME),
+// allocates nothing per shot, and is never created in the deterministic
+// ?shot= scenes — nothing fires there, so the stills stay byte-stable.
+// Player only: NPCs never shoot in Palmera.
+
+/** The flash's starburst: a hot core with four spikes, drawn once. */
+function makeMuzzleTexture() {
+  const cv = document.createElement('canvas');
+  cv.width = 128;
+  cv.height = 128;
+  const ctx = cv.getContext('2d');
+  ctx.translate(64, 64);
+  ctx.fillStyle = 'rgba(255,166,60,0.85)';
+  for (const [ang, len, wid] of [[0, 62, 9], [Math.PI / 2, 44, 7], [Math.PI, 42, 7], [-Math.PI / 2, 42, 7], [Math.PI / 4, 30, 5], [-Math.PI / 4, 30, 5], [3 * Math.PI / 4, 30, 5], [-3 * Math.PI / 4, 30, 5]]) {
+    ctx.save();
+    ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.moveTo(0, -wid / 2);
+    ctx.lineTo(len, 0);
+    ctx.lineTo(0, wid / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+  const core = ctx.createRadialGradient(0, 0, 1, 0, 0, 34);
+  core.addColorStop(0, 'rgba(255,255,244,1)');
+  core.addColorStop(0.35, 'rgba(255,216,110,0.95)');
+  core.addColorStop(1, 'rgba(255,140,40,0)');
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.arc(0, 0, 34, 0, Math.PI * 2);
+  ctx.fill();
+  return new THREE.CanvasTexture(cv);
+}
+
+/** Build the shared flash on first use and park it, dark, in the scene. */
+function ensureMuzzle(g) {
+  if (g.muzzle) return g.muzzle;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: makeMuzzleTexture(), blending: THREE.AdditiveBlending,
+    transparent: true, depthWrite: false, opacity: 0,
+  }));
+  sprite.scale.set(19, 19, 1);
+  sprite.renderOrder = 960;
+  const light = new THREE.PointLight(0xffb45e, 0, 320, 2);
+  const group = new THREE.Group();
+  group.add(sprite);
+  group.add(light);
+  group.visible = false;
+  g.scene.add(group);
+  g.muzzle = { group, sprite, light, t: 0 };
+  return g.muzzle;
+}
+
+/** Age the live flash: a fast swell of light, gone inside 60 ms. */
+function updateMuzzle(g, dt) {
+  const m = g.muzzle;
+  if (!m || m.t <= 0) return;
+  m.t -= dt;
+  const k = Math.max(0, m.t / MUZZLE_FLASH_TIME);
+  if (k <= 0) {
+    m.group.visible = false;
+    m.light.intensity = 0;
+    m.sprite.material.opacity = 0;
+    return;
+  }
+  m.sprite.material.opacity = k;
+  m.light.intensity = 2200 * k;
+  const s = 15 + 8 * (1 - k);
+  m.sprite.scale.set(s, s, 1);
+}
+
 /** Fire one bullet from the player's hand toward the player's facing. */
 function fireBullet(g) {
   const p = g.player;
@@ -119,6 +194,15 @@ function fireBullet(g) {
   mesh.position.set(fromX, 27, fromY);
   mesh.rotation.y = -p.angle;
   g.scene.add(mesh);
+  // The flash sits just past the bullet's spawn, at the gun tip, and its
+  // star tilts a little differently with every shot.
+  const m = ensureMuzzle(g);
+  m.group.position.set(p.x + Math.cos(p.angle) * 27, 29, p.y + Math.sin(p.angle) * 27);
+  m.sprite.material.rotation = (g.time * 13.7) % Math.PI;
+  m.t = MUZZLE_FLASH_TIME;
+  m.group.visible = true;
+  m.sprite.material.opacity = 1;
+  m.light.intensity = 2200;
   g.bullets.push({
     x: fromX,
     y: fromY,
@@ -186,6 +270,7 @@ function landPunch(g) {
 export function updateCombat(g, dt) {
   const p = g.player;
   updateImpacts(g, dt);
+  updateMuzzle(g, dt);
   p.punchCd = Math.max(0, p.punchCd - dt);
   p.shotCd = Math.max(0, p.shotCd - dt);
   if (p.punchHitT > 0) {
