@@ -514,9 +514,12 @@ function shopAt(game) {
 
 /**
  * The fixer is its own prompt: it only appears while the heat is on. He
- * works the phone booth by the PD and Bruno's counter alike — at the
- * counter the priority is story work first, the fixer second, the meal
- * third, so while Bruno has work on offer his talk keeps the E press.
+ * works the phone booth by the PD and Bruno's counter alike. Priority
+ * at the counter: Bruno's work first (his talk keeps the E press while
+ * work is on offer), then the MEAL while the player is hurt — healing
+ * is the urgent need, and a wanted man who limps in must be able to
+ * eat; once he has eaten, this prompt returns and the fixer is offered
+ * as usual. The booth has no meal to yield to.
  */
 export function fixerPrompt(game) {
   if (game.player.state !== 'foot' || game.stars <= 0) return null;
@@ -526,6 +529,7 @@ export function fixerPrompt(game) {
   if (!atBooth && !atDiner) return null;
   if (atDiner && game.bruno && near(game.player, game.bruno, 50)
     && (missionAvailable(game) || jobAvailable(game))) return null;
+  if (atDiner && game.player.hp < game.player.maxHp) return null;
   return t('prompt.fixer', { cost: cash(game.stars * FIXER.perStar) });
 }
 
