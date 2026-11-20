@@ -265,7 +265,9 @@ function landPunch(g) {
     // A punch that lands reads through the camera as well as the arm.
     g.shake = Math.max(g.shake, 2.8);
   }
-  g.events.push({ type: hitSomething ? 'punchhit' : 'punchmiss', down: downed });
+  // Only a connect is an event now: the swing sound moved to punch
+  // initiation ('punchswing'), so a miss needs no landing event at all.
+  if (hitSomething) g.events.push({ type: 'punchhit', down: downed });
 }
 
 /** The player's attacks for one frame: punch taps, held gunfire, landing strikes. */
@@ -288,6 +290,12 @@ export function updateCombat(g, dt) {
   if (p.state !== 'foot' || g.transition) return;
   if (g.input.tapped('KeyF', 'KeyJ') && p.punchCd <= 0) {
     p.punchCd = PLAYER.punchCooldown;
+    // The whoosh belongs to the SWING, not the landing: it fires here,
+    // at initiation, for every punch the player throws — hit or miss.
+    // (It used to hang off the landing 'punchmiss' event, so a punch
+    // that connected never whooshed at all and a miss whooshed 0.2 s
+    // late. Round #22.)
+    g.events.push({ type: 'punchswing' });
     // The rig's strike reaches full extension 46% into its 0.44 s punch:
     // this is when the fist actually arrives, so the damage waits for it.
     p.punchHitT = 0.2;

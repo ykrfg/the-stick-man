@@ -176,7 +176,12 @@ export class SoundFX {
     this.tone('sine', 120, 45, 0.14, 0.3);
   }
 
-  /** A fist through empty air: the recorded whoosh, or the old synth swish. */
+  /**
+   * The swing whoosh: fires at punch initiation for EVERY player punch
+   * (round #22 — it used to play only on a miss, at landing). Gain
+   * stays 0.5: as an every-punch sound it must sit under the connect
+   * sounds (punch ~0.9, heavy 0.95), present but never competing.
+   */
   swing() {
     if (this.playFile('swing', 0.5)) return;
     this.tone('triangle', 150, 90, 0.05, 0.1);

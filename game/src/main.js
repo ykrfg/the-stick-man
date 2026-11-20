@@ -122,7 +122,7 @@ const g = {
   // title orbit never touch it). yaw/pitch orbit the hero, dist is the
   // smoothed slant range, collDist the building-collision limit on it.
   cam: {
-    init: false, yaw: 0, pitch: 0.42, dist: 250, zoomIdx: 2,
+    init: false, yaw: 0, pitch: 0.42, dist: 200, zoomIdx: 2,
     manualT: 99, collDist: 1e9, backBlend: 0, lookBack: false, occluded: false,
     rescue: 0,
   },
@@ -445,7 +445,11 @@ function finishEnterCar() {
     }
   }
   p.fig.target.crouch = 0;
-  g.events.push({ type: 'crime', kind: 'stealCar', x: car.x, y: car.y });
+  // Getting into your OWN car is not a crime: the stealCar heat only
+  // fires for a car that is not the player's (round #22 — before this,
+  // every entry into a bought car cost 40 heat, a star at the first
+  // threshold, as if it had been stolen).
+  if (!car.owned) g.events.push({ type: 'crime', kind: 'stealCar', x: car.x, y: car.y });
   g.sfx.carDoor();
 }
 
@@ -568,7 +572,7 @@ function processEvents() {
         // (three frames) that it never reads as a stutter.
         g.hitstop = Math.max(g.hitstop, 0.05);
         break;
-      case 'punchmiss': g.sfx.swing(); break;
+      case 'punchswing': g.sfx.swing(); break;
       case 'brake': g.sfx.brake(false); break;
       case 'brakeLong': g.sfx.brake(true); break;
       case 'screech': g.sfx.screech(ev.strength ?? 1); break;
@@ -726,12 +730,19 @@ function updateInteractions(dt) {
       g.prompt = fixerPrompt(g);
       return;
     }
-    if (p.hp < p.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
+    // Affordability gate (round #22): an action the player cannot pay
+    // for never claims the prompt or the E press. A hurt player with
+    // less than the meal price used to be trapped here — every press
+    // bought a meal he could not afford, and Bruno's work behind the
+    // meal branch was unreachable. Among AFFORDABLE actions the
+    // round #21 order stands unchanged: talk (in the fixer yield and
+    // below) / meal / fixer.
+    if (p.hp < p.maxHp && g.money >= MEAL_PRICE && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
       // A hurt player at the counter eats first: Bruno's work (story or
       // odd job) is one step to his side, and the meal would otherwise
       // be unreachable in free roam, where a job is always on offer.
       g.prompt = t('prompt.meal', { price: `$${MEAL_PRICE}` });
-    } else if (p.hp < p.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
+    } else if (p.hp < p.maxHp && g.money >= TREAT_PRICE && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
       g.prompt = t('prompt.treat', { price: `$${TREAT_PRICE}` });
     } else if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
       g.prompt = t('prompt.talk');
@@ -751,7 +762,8 @@ function updateInteractions(dt) {
     } else if (shopPrompt(g)) {
       g.prompt = shopPrompt(g);
     } else if (nearestEnterableCar()) {
-      g.prompt = t('prompt.stealCar');
+      // Your own car is not a theft, and the prompt must not call it one.
+      g.prompt = t(nearestEnterableCar().owned ? 'prompt.ownCar' : 'prompt.stealCar');
     } else {
       // The one car that will never open its door: the courier, driver
       // at the wheel, doors locked. It used to refuse in silence — the
@@ -852,11 +864,11 @@ function handleInteract() {
     if (g.robbery) return; // E does nothing while a hold-up is being stood through
     if (economyInteract(g)) return;
     const L = g.city.landmarks;
-    if (p.hp < p.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
+    if (p.hp < p.maxHp && g.money >= MEAL_PRICE && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
       healAt("BRUNO'S", MEAL_PRICE, t('heal.meal.ok'), t('heal.meal.broke'));
       return;
     }
-    if (p.hp < p.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
+    if (p.hp < p.maxHp && g.money >= TREAT_PRICE && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
       healAt('ST. PALM', TREAT_PRICE, t('heal.treat.ok'), t('heal.treat.broke'));
       return;
     }
@@ -909,8 +921,13 @@ const camPos = new THREE.Vector3(900, 420, 300);
 const camLook = new THREE.Vector3(1270, 10, 1100);
 
 /** Move the camera for the current state: title orbit, foot follow, car chase. */
-// GTA-style camera zoom steps (slant range from the hero).
-const ZOOM_STEPS = [140, 190, 250, 330];
+// GTA-style camera zoom steps (slant range from the hero). Round #22:
+// every step 20% closer than the original [140, 190, 250, 330], in the
+// direction of the top-ranked games' character-forward framing — the
+// default (index 2) is now 200. The pitch-rescue floor, the in-car
+// 1.2x and the speed lift all key off the chosen step, so they follow
+// automatically; the ?shot= cameras are separate and untouched.
+const ZOOM_STEPS = [112, 152, 200, 264];
 
 /** Shortest signed arc from angle a to angle b, in (-PI, PI]. */
 function angleArc(a, b) {
