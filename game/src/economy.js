@@ -13,7 +13,7 @@ import {
 } from './config.js';
 import { t } from './i18n.js';
 import { jobAvailable, missionAvailable } from './missions.js';
-import { applyCarSpec, spawnCar } from './vehicles.js';
+import { applyCarSpec, removeCar, spawnCar } from './vehicles.js';
 
 let g = null;
 let tray = null;
@@ -622,6 +622,10 @@ export function callCar(game) {
     return;
   }
   if (!spend(MOTORS.call)) return;
+  // The same car rolls in — never a duplicate: the slot's live car
+  // leaves the world here and re-enters at the kerb approach below.
+  const old = carForSlot(slot);
+  if (old) removeCar(g, old);
   const p = g.player;
   const spot = kerbSpot(p);
   const away = spot.axis === 'y'
@@ -643,8 +647,21 @@ function updateSummon(dt) {
     const dx = car.summon.x - car.x;
     const dy = car.summon.y - car.y;
     const d = Math.hypot(dx, dy);
-    if (d < 8) {
+    // Arrival is a car length, not a point — and if the way to the
+    // exact spot is wedged (a parked car holding the kerb, a corner),
+    // separation physics can hold the car at a stand-off forever.
+    // No closing progress for a beat and a half counts as arrived:
+    // it is at the kerb, which is all the player asked for.
+    if (car.summonBest === undefined || d < car.summonBest - 2) {
+      car.summonBest = d;
+      car.summonStall = 0;
+    } else {
+      car.summonStall = (car.summonStall ?? 0) + dt;
+    }
+    if (d < 30 || car.summonStall > 1.2) {
       car.summon = null;
+      car.summonBest = undefined;
+      car.summonStall = 0;
       car.speed = 0;
       continue;
     }
