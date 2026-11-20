@@ -3,7 +3,7 @@
 // Hut, Club Neon, the pier warehouse), a park, a beach promenade, and plain city
 // blocks filled with flat-coloured buildings. This module owns the map data and the
 // collision helpers every moving thing uses; it draws nothing itself.
-import { COLORS, ROAD, WORLD } from './config.js';
+import { COLORS, MOTORS, ROAD, WORLD } from './config.js';
 
 /** Y coordinate where the beach sand starts; south of the last street. */
 export const BEACH_Y = 2240;
@@ -85,6 +85,7 @@ export function buildCity(rng) {
     garageZone: { x: 2195, y: 430, w: 130, h: 190 },
     landmarks: {},
     shops: [],
+    motorsLot: [],
   };
   const at = (col, row) => city.blocks.find((b) => b.col === col && b.row === row);
 
@@ -106,6 +107,8 @@ export function buildCity(rng) {
   const pd = at(1, 3);
   city.buildings.push(building(pd.x + 45, pd.y + 35, 240, 200, rng, 'PALMERA PD'));
   city.landmarks.pd = { x: pd.x + 165, y: pd.y + 385 };
+  // The fixer's phone booth, on the PD block's own sidewalk.
+  city.landmarks.fixer = { x: pd.x + 300, y: pd.y + 300 };
 
   const hospital = at(6, 3);
   city.buildings.push(building(hospital.x + 45, hospital.y + 35, 240, 200, rng, 'ST. PALM HOSPITAL'));
@@ -119,6 +122,17 @@ export function buildCity(rng) {
   city.buildings.push(building(pier.x + 35, pier.y + 35, 320, 240, rng, 'PIER WAREHOUSE'));
   city.landmarks.pier = { x: pier.x + 195, y: pier.y + 335 };
 
+  // PALMERA MOTORS: a glassy showroom with three marked bays out front.
+  const motors = at(0, 4);
+  city.buildings.push(building(motors.x + 45, motors.y + 45, 240, 200, rng, MOTORS.name));
+  city.landmarks.motors = { x: motors.x + 165, y: motors.y + 275 };
+  city.motorsLot = [60, 165, 270].map((ox) => ({ x: motors.x + ox, y: motors.y + 300 }));
+
+  // The safehouse: a quiet low block west of the PD, door on the south face.
+  const safe = at(0, 1);
+  city.buildings.push(building(safe.x + 45, safe.y + 35, 240, 200, rng, 'SAFEHOUSE'));
+  city.landmarks.safehouse = { x: safe.x + 165, y: safe.y + 275 };
+
   // The three shops Bruno sends you to in the rent-collection mission.
   const shopDefs = [
     { col: 1, row: 1, name: 'NOODLE BAR NUKI' },
@@ -130,6 +144,9 @@ export function buildCity(rng) {
     const top = def.row === 0 ? 15 : 35;
     city.buildings.push(building(block.x + 45, block.y + top, 240, 180, rng, def.name));
     city.shops.push({ name: def.name, x: block.x + 165, y: block.y + top + 200 });
+    if (def.name === 'SURF SHACK') {
+      city.landmarks.surf = { x: block.x + 69, y: block.y + top + 200 };
+    }
   }
 
   // The park block: lawns and round trees, no buildings.
@@ -148,7 +165,7 @@ export function buildCity(rng) {
   for (let x = 140; x < WORLD.width; x += 260) {
     city.trees.push({ x: x + rng.int(-30, 30), y: BEACH_Y + 60 + rng.int(-8, 8), r: 15, kind: 'palm' });
   }
-  const landmarkBlocks = new Set(['3,2', '4,1', '5,1', '1,3', '6,3', '2,4', '7,4', '1,1', '5,3', '2,0', '4,2']);
+  const landmarkBlocks = new Set(['3,2', '4,1', '5,1', '1,3', '6,3', '2,4', '7,4', '1,1', '5,3', '2,0', '4,2', '0,1', '0,4']);
   for (const block of city.blocks) {
     if (block.row === 5) continue; // the beach row stays open
     if (landmarkBlocks.has(`${block.col},${block.row}`)) continue;

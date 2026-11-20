@@ -181,6 +181,16 @@ function drawMinimap(g, ctx) {
     else if (ped.role === 'rival') dot(ped.x, ped.y, 3.4, '#ff5a4d');
     else if (ped.role === 'shade') dot(ped.x, ped.y, 3.4, '#e8e8e8');
   }
+  // Owned cars are gold ticks; a stolen one is a pulsing red pin you can walk
+  // to (economy.js owns the theft clock and the pin list).
+  for (const car of g.cars) {
+    if (car.owned && !car.wrecked) dot(car.x, car.y, 3, '#ffd94d');
+  }
+  for (const pin of g.stolenPins || []) {
+    const pulse = 3.6 + Math.sin(g.time * 6) * 1.2;
+    dot(pin.x, pin.y, pulse, '#ff5a4d');
+    dot(pin.x, pin.y, 1.2, '#ffffff');
+  }
   // The player: a white dot with a facing tick.
   const p = g.player;
   dot(p.x, p.y, 4.4, '#ffffff');
@@ -525,7 +535,7 @@ export function drawHUD(g) {
   roundRect(ctx, 18, 54, hpW, 16, 5);
   ctx.fillStyle = 'rgba(10,10,16,0.6)';
   ctx.fill();
-  roundRect(ctx, 20, 56, (hpW - 4) * Math.max(0, g.player.hp / PLAYER.maxHp), 12, 4);
+  roundRect(ctx, 20, 56, (hpW - 4) * Math.max(0, g.player.hp / (g.player.maxHp ?? PLAYER.maxHp)), 12, 4);
   ctx.fillStyle = g.player.hp > 30 ? '#51cf66' : '#ff5a4d';
   ctx.fill();
   ctx.font = '700 12px system-ui, sans-serif';

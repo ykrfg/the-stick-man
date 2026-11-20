@@ -51,7 +51,10 @@ export function setupShot(g, name) {
   g.state = 'play';
   g.shotMode = name;
   g.money = 640;
-  g.saveData = { money: 640, missionsDone: [], hasPistol: false, earned: 0 };
+  // Keep the full save shape (gear/fit/owned) that economy.js expects.
+  g.saveData.money = 640;
+  g.saveData.missionsDone = [];
+  g.saveData.earned = 0;
 
   if (name === 'cover') {
     // A stolen red car tears south down the avenue with two police cars behind.
@@ -72,8 +75,8 @@ export function setupShot(g, name) {
     // The camera sits behind the police cars, looking down the avenue at the
     // stolen car ahead of them: the whole pursuit in one frame.
     g.fixedCam = {
-      pos: { x: 1574, y: 165, z: 1015 },
-      look: { x: 1574, y: 12, z: 1470 },
+      pos: { x: 1574, y: 200, z: 940 },
+      look: { x: 1574, y: 10, z: 1460 },
     };
     // Bystanders on the sidewalks for life.
     spawnShotPed(g, { role: 'ped', x: 1505, y: 1330 });
@@ -115,8 +118,8 @@ export function setupShot(g, name) {
     const guard = spawnShotPed(g, { role: 'ped', x: door.x + 80, y: door.y + 26 });
     guard.speedNow = 0;
     g.fixedCam = {
-      pos: { x: door.x - 195, y: 85, z: door.y + 245 },
-      look: { x: door.x - 35, y: 22, z: door.y + 8 },
+      pos: { x: door.x - 340, y: 110, z: door.y + 250 },
+      look: { x: door.x - 30, y: 22, z: door.y + 20 },
     };
   } else if (name === 'fight') {
     // A fistfight on the open intersection: the hero's cross landing at

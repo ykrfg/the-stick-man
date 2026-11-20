@@ -1,7 +1,28 @@
 // Every sound in the game is synthesized with WebAudio: short oscillator and noise
 // bleeps for punches, pickups, gunfire and menus, a two-tone siren that loops while
-// the police are close, and a low engine hum pitched by the car's speed. There are
-// no audio files. The context is created lazily on the first user gesture.
+// the police are close, and a low engine hum pitched by the car's speed. Recorded
+// effects live in game/audio/ and take over their synth counterparts whenever the
+// file is present (see SE_FILES): gun, punch connects and knockouts, swings, the
+// brake chirp and screech, the car door and the crash. Anything missing or not
+// yet decoded falls back to the synth voice, so the game sounds whole offline,
+// on any host, from the first frame.
+
+/**
+ * The recorded-effect manifest: logical pool -> files in game/audio/.
+ * Pools with several files pick one at random per play, with a slight
+ * pitch wobble, so repeated hits never sound stamped out. Provenance and
+ * licences for every file: game/audio/SOURCES.md.
+ */
+const SE_FILES = {
+  gun: ['audio/se_gun.ogg'],
+  swing: ['audio/se_swing1.ogg', 'audio/se_swing2.ogg', 'audio/se_swing3.ogg', 'audio/se_swing4.ogg'],
+  punch: ['audio/se_punch1.ogg', 'audio/se_punch2.ogg', 'audio/se_punch3.ogg', 'audio/se_punch4.ogg'],
+  heavy: ['audio/se_punch_heavy1.ogg', 'audio/se_punch_heavy2.ogg', 'audio/se_punch_heavy3.ogg', 'audio/se_punch_heavy4.ogg'],
+  brake: ['audio/se_brake.ogg'],
+  brakeLong: ['audio/se_brake_long.ogg'],
+  door: ['audio/se_cardoor.ogg'],
+  crash: ['audio/se_crash.ogg'],
+};
 
 export class SoundFX {
   constructor() {
@@ -10,6 +31,8 @@ export class SoundFX {
     this.muted = false;
     this.sirenNodes = null;
     this.engineNodes = null;
+    this.fileBuffers = {};
+    this.filesStarted = false;
   }
 
   /** Create (or resume) the context. Call from a key or mouse handler. */
@@ -21,13 +44,58 @@ export class SoundFX {
       this.master = this.ctx.createGain();
       this.master.gain.value = 0.5;
       this.master.connect(this.ctx.destination);
+      this.seMaster = this.ctx.createGain();
+      this.seMaster.gain.value = this.se;
+      this.seMaster.connect(this.master);
+      this.loadFiles();
     }
     if (this.ctx.state === 'suspended') this.ctx.resume();
+  }
+
+  /**
+   * Fetch and decode the recorded effects once, in the background. A file
+   * that is absent or undecodable simply never lands in its pool, and the
+   * synth voice covers it — the manifest is an upgrade, never a dependency.
+   */
+  loadFiles() {
+    if (this.filesStarted || !this.ctx) return;
+    this.filesStarted = true;
+    for (const [pool, files] of Object.entries(SE_FILES)) {
+      this.fileBuffers[pool] = [];
+      for (const url of files) {
+        fetch(url)
+          .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(url))))
+          .then((buf) => this.ctx.decodeAudioData(buf))
+          .then((decoded) => { this.fileBuffers[pool].push(decoded); })
+          .catch(() => { /* synth fallback covers this file */ });
+      }
+    }
+  }
+
+  /**
+   * Play one recorded effect from a pool through the SE bus. Returns false
+   * when nothing in the pool is ready, so the caller runs its synth voice.
+   */
+  playFile(pool, volume = 0.9) {
+    if (!this.ctx || this.muted || !this.seMaster) return false;
+    const ready = this.fileBuffers[pool];
+    if (!ready || ready.length === 0) return false;
+    const buffer = ready[Math.floor(Math.random() * ready.length)];
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.value = 0.94 + Math.random() * 0.12;
+    const gain = this.ctx.createGain();
+    gain.gain.value = volume;
+    source.connect(gain);
+    gain.connect(this.seMaster);
+    source.start();
+    return true;
   }
 
   setMuted(muted) {
     this.muted = muted;
     if (this.master) this.master.gain.value = muted ? 0 : 0.5;
+    if (this.seMaster) this.seMaster.gain.value = muted ? 0 : this.se;
   }
 
   /** One oscillator blip: type, start/end frequency, length, volume, delay. */
@@ -42,7 +110,7 @@ export class SoundFX {
     gain.gain.setValueAtTime(volume, t0);
     gain.gain.exponentialRampToValueAtTime(0.001, t0 + seconds);
     osc.connect(gain);
-    gain.connect(this.master);
+    gain.connect(this.seMaster);
     osc.start(t0);
     osc.stop(t0 + seconds + 0.02);
   }
@@ -65,8 +133,14 @@ export class SoundFX {
     gain.gain.exponentialRampToValueAtTime(0.001, t0 + seconds);
     source.connect(filter);
     filter.connect(gain);
-    gain.connect(this.master);
+    gain.connect(this.seMaster);
     source.start(t0);
+  }
+
+  /** Sound-effect bus volume 0..1 (volume slider; independent of the music). */
+  setSeVolume(v) {
+    this.se = Math.max(0, Math.min(1, v));
+    if (this.seMaster) this.seMaster.gain.value = this.se;
   }
 
   uiBlip() {
@@ -79,8 +153,22 @@ export class SoundFX {
   }
 
   punch() {
+    if (this.playFile('punch', 0.85)) return;
     this.noise(0.09, 0.3, 700);
     this.tone('sine', 160, 60, 0.09, 0.2);
+  }
+
+  /** A knockout-grade connect: the heavy recorded thud, or a deeper synth. */
+  punchHeavy() {
+    if (this.playFile('heavy', 0.95)) return;
+    this.noise(0.14, 0.42, 500);
+    this.tone('sine', 120, 45, 0.14, 0.3);
+  }
+
+  /** A fist through empty air: the recorded whoosh, or the old synth swish. */
+  swing() {
+    if (this.playFile('swing', 0.5)) return;
+    this.tone('triangle', 150, 90, 0.05, 0.1);
   }
 
   hurt() {
@@ -88,6 +176,7 @@ export class SoundFX {
   }
 
   shoot() {
+    if (this.playFile('gun', 0.85)) return;
     this.noise(0.12, 0.32, 2600);
     this.tone('square', 320, 70, 0.1, 0.14);
   }
@@ -104,13 +193,25 @@ export class SoundFX {
   }
 
   carDoor() {
+    if (this.playFile('door', 0.85)) return;
     this.noise(0.06, 0.2, 500);
     this.tone('sine', 120, 70, 0.08, 0.16, 0.03);
   }
 
   crash(strength = 1) {
+    if (this.playFile('crash', Math.min(1, 0.35 + 0.65 * strength))) return;
     this.noise(0.18, 0.3 * strength, 900);
     this.tone('sine', 110, 40, 0.18, 0.22 * strength);
+  }
+
+  /**
+   * The brake pedal's voice: the short recorded chirp for an ordinary
+   * stop, the long screech only for a hard stop from high speed (the
+   * callers in vehicles.js pick which, by the speed the stop began at).
+   */
+  brake(long) {
+    if (this.playFile(long ? 'brakeLong' : 'brake', 0.8)) return;
+    this.screech(long ? 1 : 0.55);
   }
 
   /** Tyre screech for a handbrake slide: bright noise with a falling whine. */
@@ -141,7 +242,7 @@ export class SoundFX {
       lfoGain.connect(osc.frequency);
       gain.gain.value = this.muted ? 0 : 0.045;
       osc.connect(gain);
-      gain.connect(this.ctx.destination);
+      gain.connect(this.seMaster);
       osc.start();
       lfo.start();
       this.sirenNodes = { osc, lfo, gain };
@@ -172,7 +273,7 @@ export class SoundFX {
       filter.frequency.value = 320;
       osc.connect(filter);
       filter.connect(gain);
-      gain.connect(this.master);
+      gain.connect(this.seMaster);
       osc.start();
       this.engineNodes = { osc, gain };
     }

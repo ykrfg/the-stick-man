@@ -194,6 +194,14 @@ function fireBullet(g) {
   mesh.position.set(fromX, 27, fromY);
   mesh.rotation.y = -p.angle;
   g.scene.add(mesh);
+  g.bullets.push({
+    x: fromX,
+    y: fromY,
+    vx: Math.cos(p.angle) * PLAYER.bulletSpeed,
+    vy: Math.sin(p.angle) * PLAYER.bulletSpeed,
+    life: PLAYER.bulletRange / PLAYER.bulletSpeed,
+    mesh,
+  });
   // The flash sits just past the bullet's spawn, at the gun tip, and its
   // star tilts a little differently with every shot.
   const m = ensureMuzzle(g);
@@ -203,14 +211,6 @@ function fireBullet(g) {
   m.group.visible = true;
   m.sprite.material.opacity = 1;
   m.light.intensity = 2200;
-  g.bullets.push({
-    x: fromX,
-    y: fromY,
-    vx: Math.cos(p.angle) * PLAYER.bulletSpeed,
-    vy: Math.sin(p.angle) * PLAYER.bulletSpeed,
-    life: PLAYER.bulletRange / PLAYER.bulletSpeed,
-    mesh,
-  });
   g.events.push({ type: 'shot' });
 }
 
@@ -218,6 +218,7 @@ function fireBullet(g) {
 function landPunch(g) {
   const p = g.player;
   let hitSomething = false;
+  let downed = false;
   let hitX = 0;
   let hitY = 0;
   let hitAngle = p.angle;
@@ -228,7 +229,8 @@ function landPunch(g) {
     if (d > PLAYER.punchRange + 8) continue;
     const dir = Math.atan2(ped.y - p.y, ped.x - p.x);
     if (Math.abs(angleDiff(dir, p.angle)) > 1.15) continue;
-    hurtPed(g, ped, PLAYER.punchDamage);
+    hurtPed(g, ped, p.punchDamage ?? PLAYER.punchDamage);
+    if (ped.state === 'down') downed = true;
     ped.x += Math.cos(dir) * 9;
     ped.y += Math.sin(dir) * 9;
     if (!hitSomething) {
@@ -263,7 +265,7 @@ function landPunch(g) {
     // A punch that lands reads through the camera as well as the arm.
     g.shake = Math.max(g.shake, 2.8);
   }
-  g.events.push({ type: hitSomething ? 'punchhit' : 'punchmiss' });
+  g.events.push({ type: hitSomething ? 'punchhit' : 'punchmiss', down: downed });
 }
 
 /** The player's attacks for one frame: punch taps, held gunfire, landing strikes. */

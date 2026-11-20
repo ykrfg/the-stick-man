@@ -15,6 +15,9 @@
 // carries one of six mouth shapes (neutral, grin, angry, shout, smug,
 // frustrated), swapped by name — dark shapes on the white head, light on black.
 import * as THREE from 'three';
+import { OUTFIT } from './config.js';
+
+const OUTFIT_COLORS = OUTFIT.colors;
 
 export const EXPRESSIONS = ['neutral', 'grin', 'angry', 'shout', 'smug', 'frustrated'];
 
@@ -277,6 +280,36 @@ export function createFigure(opts = {}) {
     neck.add(brim);
   }
 
+  // Wardrobe props (hat, shades, scarf) hang off the head/neck and start
+  // hidden. They are attached, not recoloured body parts, so the white head
+  // and black outline identity never changes; setFit toggles them.
+  const hatGroup = new THREE.Group();
+  const hatMat = toonMat(0x25252c);
+  const hatCrown = new THREE.Mesh(new THREE.CylinderGeometry(3.5, 3.9, 3.4, 12), hatMat);
+  hatCrown.position.set(0.5, 7.4, 0);
+  const hatBrim = new THREE.Mesh(new THREE.CylinderGeometry(5.6, 5.6, 0.55, 14), hatMat);
+  hatBrim.position.set(0.5, 5.9, 0);
+  hatGroup.add(hatCrown, hatBrim);
+  hatGroup.visible = false;
+  neck.add(hatGroup);
+
+  const shades = new THREE.Mesh(
+    new THREE.BoxGeometry(0.9, 2.4, 6.4),
+    basicMat(0x15151b),
+  );
+  shades.position.set(4.85, 3.5, 0);
+  shades.visible = false;
+  neck.add(shades);
+
+  const scarf = new THREE.Mesh(
+    new THREE.TorusGeometry(3.9, 1.15, 6, 14),
+    toonMat(0xd6353a),
+  );
+  scarf.position.set(0.4, 0.7, 0);
+  scarf.rotation.x = Math.PI / 2;
+  scarf.visible = false;
+  neck.add(scarf);
+
   // A little pistol in the right hand, shown when the figure is armed.
   // It is built along the forearm's own axis — barrel running past the
   // fist, grip raked back behind it — so the one mount reads in every
@@ -329,6 +362,15 @@ export function createFigure(opts = {}) {
     },
     setGun(on) {
       gun.visible = on;
+    },
+    /** Show the bought wardrobe props; `fit` is the save's fit object. */
+    setFit(fit) {
+      hatGroup.visible = fit?.hat === true;
+      shades.visible = fit?.shades === true;
+      scarf.visible = fit?.scarf === true;
+      if (fit && Number.isInteger(fit.color) && OUTFIT_COLORS[fit.color] !== undefined) {
+        scarf.material = toonMat(OUTFIT_COLORS[fit.color]);
+      }
     },
     /** Freeze the punch at phase p for a composed still (arm 'R' | 'L'). */
     posePunch(p, arm = 'R') {

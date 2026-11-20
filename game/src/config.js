@@ -119,6 +119,8 @@ export const MUZZLE_FLASH_TIME = 0.055;
  * lane it blocked. Mission-critical cars — the REPO JOB's gold car and
  * the COURIER HIT car, while their mission is active — burn the same
  * way but are NEVER removed: the mission still needs them in the world.
+ * Player-owned cars burn but are never removed either: they are bought,
+ * and the Motors desk (or the safehouse) un-wrecks them for a fee.
  */
 export const WRECK_BURN = { burn: 40, fade: 3.5 };
 
@@ -172,3 +174,71 @@ export const ROBBERY_COOLDOWN = 240;
 export const COURIER_HP = 140;
 export const RAID_TIMER = 150;
 export const RAID_TIME_BONUS = 100;
+
+/* ------------------------------------------------------------------ economy */
+
+/** Real seconds in one in-game day (12 min). Noon is 360; stills pin 17:20. */
+export const DAY_SECONDS = 720;
+export const DAY_START = 360;
+export const SHOT_HOUR = 17.33;
+
+/** PALMERA MOTORS: three grades; paint is one price at any grade. */
+export const MOTORS = {
+  name: 'PALMERA MOTORS',
+  grades: [
+    { id: 'compact', price: 800, top: 350, accel: 320 },
+    { id: 'sedan', price: 1500, top: 410, accel: 355 },
+    { id: 'coupe', price: 2500, top: 470, accel: 390 },
+  ],
+  paint: 60,
+  paints: [0xd6353a, 0x2f7bd6, 0xf2b705, 0x2fae6e, 0x2a2a31, 0xf4f1e6, 0xff7a1a, 0x8e5bd8, 0x35c4c9, 0xd64f9e],
+  engine: [
+    { price: 200, accel: 1.08, top: 1.03 },
+    { price: 450, accel: 1.17, top: 1.07 },
+    { price: 800, accel: 1.28, top: 1.12 },
+  ],
+  armor: [
+    { price: 250, hp: 30 },
+    { price: 500, hp: 60 },
+    { price: 900, hp: 100 },
+  ],
+  neon: 120,
+  recover: 150,
+  call: 30,
+};
+
+/** Underbody neon tones: bright, flat, legible in the toon night. */
+export const NEON = [
+  { id: 'cyan', color: 0x3fe6ff },
+  { id: 'pink', color: 0xff5ccf },
+  { id: 'lime', color: 0x8dff6a },
+  { id: 'gold', color: 0xffd94d },
+  { id: 'violet', color: 0xb58bff },
+];
+
+/** Ammo Hut gear and one-time upgrades. */
+export const GEAR = {
+  pistol: 150,
+  vest: [
+    { price: 200, hp: 25 },
+    { price: 450, hp: 50 },
+  ],
+  gloves: 180,
+  shoes: 160,
+  glovesBonus: 16,
+  dashCooldown: 0.75,
+};
+
+/** Wardrobe at the SURF SHACK counter. */
+export const OUTFIT = {
+  scarf: 30,
+  hat: 50,
+  shades: 80,
+  colors: [0xd6353a, 0x1fa7a0, 0xf0b429, 0x8e5bd8, 0x6f7681],
+};
+
+export const SAFEHOUSE = { price: 4000 };
+export const FIXER = { perStar: 100 };
+
+/** The owned car is stolen after this long parked this far from the player. */
+export const THEFT = { range: 900, after: 25 };

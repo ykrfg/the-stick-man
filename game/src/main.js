@@ -5,11 +5,14 @@
 // the run's start, busted and wasted flows. In ?shot= mode it instead poses one
 // of the deterministic screenshot scenes from shots.js.
 import * as THREE from 'three';
-import { CAR, HEAT_FOR, MEAL_PRICE, PLAYER, ROBBERY_COOLDOWN, ROBBERY_HEAT, ROBBERY_TIME, SPRAY_PER_STAR, TREAT_PRICE } from './config.js';
+import {
+  CAR, DAY_SECONDS, DAY_START, HEAT_FOR, MEAL_PRICE, PLAYER, ROBBERY_COOLDOWN, ROBBERY_HEAT,
+  ROBBERY_TIME, SHOT_HOUR, SPRAY_PER_STAR, TREAT_PRICE,
+} from './config.js';
 import { makeRng } from './random.js';
 import { Input } from './input.js';
 import { SoundFX } from './audio.js';
-import { clearSave, hasProgress, loadSave, storeSave } from './save.js';
+import { clearSave, freshSave, hasProgress, loadSave, storeSave } from './save.js';
 import { buildCity } from './city.js';
 import { buildWorld } from './world3d.js';
 import { createFigure } from './stick3d.js';
@@ -24,6 +27,12 @@ import { drawHUD } from './hud.js';
 import { setupShot, tickShot } from './shots.js';
 import { detectMobile, initTouch } from './touch.js';
 import { getLang, initLang, setLang, t } from './i18n.js';
+import { bindRenderer, initGfx, setQuality, update as updateGfx } from './gfx.js';
+import { initAudio, updateAudio } from './audio-director.js';
+import {
+  callCar, economyBusy, economyInteract, fixerPrompt, initEconomy, resetEconomy, shopPrompt,
+  spawnOwnedCars, updateEconomy,
+} from './economy.js';
 
 const params = new URLSearchParams(location.search);
 const shotName = params.get('shot');
@@ -38,6 +47,8 @@ initLang({ forceEn: !!shotName });
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+if ('outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, 1, 5, 4200);
 const hudCanvas = document.getElementById('hud');
@@ -49,6 +60,7 @@ const city = buildCity(rng);
 const g = {
   scene,
   camera,
+  renderer,
   hudCtx,
   viewW: 1280,
   viewH: 720,
@@ -97,7 +109,12 @@ const g = {
   // RESET PROGRESS tap arms it, a second within a few seconds wipes the
   // save; any other input, or the timer running out, disarms it.
   resetArm: { armed: false, t: 0 },
-  saveData: loadSave() ?? { money: 0, missionsDone: [], hasPistol: false, earned: 0, jobsDone: 0 },
+  saveData: shotName ? freshSave() : (loadSave() ?? freshSave()),
+  // The day clock, in DAY_SECONDS from midnight. Saved; ?shot= pins its hour.
+  clock: 0,
+  shotHour: shotName ? SHOT_HOUR : null,
+  shopOpen: null,
+  stolenPins: [],
   shotMode: null,
   fixedCam: null,
   // GTA-style free camera state (play states only; the ?shot= scenes and the
@@ -116,7 +133,10 @@ const g = {
 
 g.money = g.saveData.money ?? 0;
 g.earned = g.saveData.earned ?? 0;
-buildWorld(scene, g.city);
+g.clock = typeof g.saveData.clock === 'number' ? g.saveData.clock : DAY_START;
+const world = buildWorld(scene, g.city);
+// Lit window panes: gfx.js drives their emissive strength from the clock.
+g.windowMats = world.windowMats || [];
 
 // The hero: a white-headed, black-bodied stick figure with a grin, spawned outside the diner.
 const dinerDoor = g.city.landmarks.diner;
@@ -126,6 +146,7 @@ g.player = {
   angle: Math.PI / 2,
   moveAngle: Math.PI / 2,
   hp: PLAYER.maxHp,
+  maxHp: PLAYER.maxHp,
   state: 'foot',
   car: null,
   fig: createFigure({ fill: 'white' }),
@@ -186,6 +207,14 @@ for (let i = 0; i < 7; i += 1) spawnTrafficCar(g);
 g.bruno = spawnPeds(g, 15);
 missionsInit(g);
 
+// Atmosphere, economy and audio come up after the world and the hero exist.
+initGfx(g);
+bindRenderer(renderer);
+initEconomy(g);
+if (!shotName) spawnOwnedCars(g);
+if (!shotName) initAudio(g);
+if (shotName) setQuality(2);
+
 if (shotName) setupShot(g, shotName);
 
 // Smartphone mode: virtual joystick + buttons feeding g.input (touch.js).
@@ -245,9 +274,11 @@ window.__resize = (w, h) => {
 function persist() {
   g.saveData.money = g.money;
   g.saveData.earned = g.earned;
-  g.saveData.hasPistol = g.player.hasPistol;
+  g.saveData.clock = g.clock;
+  g.saveData.gear.pistol = g.player.hasPistol === true;
   storeSave(g.saveData);
 }
+g.persist = persist;
 
 // --- Progress reset (title / pause screens, desktop and touch) ---
 // One shared poke for the R key and the RESET PROGRESS button: the first
@@ -278,7 +309,8 @@ function pokeReset() {
     return;
   }
   disarmReset();
-  g.saveData = { money: 0, missionsDone: [], hasPistol: false, earned: 0, jobsDone: 0 };
+  resetEconomy(g);
+  g.saveData = freshSave();
   g.money = 0;
   g.earned = 0;
   clearSave();
@@ -475,10 +507,15 @@ function respawn() {
   p.kbX = 0;
   p.kbY = 0;
   p.fig.shadow.visible = true;
-  const spot = wasBusted ? g.city.landmarks.pd : g.city.landmarks.hospital;
+  // The safehouse, once bought, is the respawn point for both endings:
+  // busted and wasted alike wake up at its door. Without it the old
+  // split stands — the PD after a bust, the hospital after a wasting.
+  const spot = g.saveData.safehouse
+    ? g.city.landmarks.safehouse
+    : (wasBusted ? g.city.landmarks.pd : g.city.landmarks.hospital);
   p.x = spot.x;
   p.y = spot.y + 12;
-  p.hp = PLAYER.maxHp;
+  p.hp = p.maxHp;
   g.state = 'play';
   g.say(wasBusted ? t('banner.released') : t('banner.discharged'), t('banner.respawn.sub'), 3);
 }
@@ -496,13 +533,17 @@ function processEvents() {
         addHeat(g, HEAT_FOR.shotFired, p.x, p.y);
         break;
       case 'punchhit':
-        g.sfx.punch();
+        // A blow that put a man down gets the heavy connect; an ordinary
+        // landed punch keeps the regular recorded hit.
+        if (ev.down) g.sfx.punchHeavy(); else g.sfx.punch();
         // The world stops for a few frames on a landed blow. This is the
         // single biggest "the punch has weight" cue; it is short enough
         // (three frames) that it never reads as a stutter.
         g.hitstop = Math.max(g.hitstop, 0.05);
         break;
-      case 'punchmiss': g.sfx.tone('triangle', 150, 90, 0.05, 0.1); break;
+      case 'punchmiss': g.sfx.swing(); break;
+      case 'brake': g.sfx.brake(false); break;
+      case 'brakeLong': g.sfx.brake(true); break;
       case 'screech': g.sfx.screech(ev.strength ?? 1); break;
       case 'cash':
         g.sfx.cash();
@@ -515,16 +556,10 @@ function processEvents() {
         // full damage lands only on ordinary pedestrians.
         runOverPed(g, ev.ped, ev.speed);
         g.sfx.punch();
-        // Bruno earns the driver no heat, ever. He cannot fall
-        // (hurtPed keeps him on his feet whatever hits him), so the
-        // run-over scan in vehicles.js — which bills every tick a
-        // fast car spends within reach of a standing ped — would
-        // otherwise charge a fresh runOver for EVERY tick a car rests
-        // against him: a pinned second at the diner door measured
-        // 1,264 heat, five stars, for a man who was not even hurt.
-        // Ordinary peds leave the scan by falling; Bruno never does.
-        // The hit itself is unchanged — he still flinches — and every
-        // other pedestrian still bills exactly as before.
+        // Bruno himself never raises the heat: he only flinches, never
+        // falls, so the per-tick runover events would stack a star a
+        // frame for as long as the car rests against him. Everyone else
+        // keeps the plain per-event heat, exactly as before.
         if (ev.byPlayer && ev.ped.role !== 'bruno') addHeat(g, HEAT_FOR.runOver, ev.ped.x, ev.ped.y);
         break;
       }
@@ -660,12 +695,16 @@ function updateInteractions(dt) {
       }
       return;
     }
-    if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
+    if (fixerPrompt(g)) {
+      g.prompt = fixerPrompt(g);
+      return;
+    }
+    if (p.hp < p.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
       // A hurt player at the counter eats first: Bruno's work (story or
       // odd job) is one step to his side, and the meal would otherwise
       // be unreachable in free roam, where a job is always on offer.
       g.prompt = t('prompt.meal', { price: `$${MEAL_PRICE}` });
-    } else if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
+    } else if (p.hp < p.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
       g.prompt = t('prompt.treat', { price: `$${TREAT_PRICE}` });
     } else if (Math.hypot(p.x - g.bruno.x, p.y - g.bruno.y) < 50 && (missionAvailable(g) || jobAvailable(g))) {
       g.prompt = t('prompt.talk');
@@ -682,6 +721,8 @@ function updateInteractions(dt) {
       } else {
         g.prompt = t('prompt.holdup', { shop: g.city.shops[si].name });
       }
+    } else if (shopPrompt(g)) {
+      g.prompt = shopPrompt(g);
     } else if (nearestEnterableCar()) {
       g.prompt = t('prompt.stealCar');
     } else {
@@ -750,7 +791,7 @@ function updateInteractions(dt) {
  */
 function healAt(name, fullPrice, okLine, brokeLine) {
   const p = g.player;
-  const missing = PLAYER.maxHp - p.hp;
+  const missing = p.maxHp - p.hp;
   if (missing <= 0) return;
   if (g.money <= 0) {
     g.say(name, brokeLine, 2.6);
@@ -761,7 +802,7 @@ function healAt(name, fullPrice, okLine, brokeLine) {
   const healed = Math.max(1, Math.round(missing * frac));
   const cost = Math.ceil(fullPrice * frac);
   g.money -= cost;
-  p.hp = Math.min(PLAYER.maxHp, p.hp + healed);
+  p.hp = Math.min(p.maxHp, p.hp + healed);
   g.say(name, t('heal.result', { line: okLine, healed, cost: `$${cost}` }), 2.8);
   g.sfx.cash();
   persist();
@@ -782,12 +823,13 @@ function handleInteract() {
   }
   if (p.state === 'foot') {
     if (g.robbery) return; // E does nothing while a hold-up is being stood through
+    if (economyInteract(g)) return;
     const L = g.city.landmarks;
-    if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
+    if (p.hp < p.maxHp && Math.hypot(p.x - L.diner.x, p.y - L.diner.y) < 64) {
       healAt("BRUNO'S", MEAL_PRICE, t('heal.meal.ok'), t('heal.meal.broke'));
       return;
     }
-    if (p.hp < PLAYER.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
+    if (p.hp < p.maxHp && Math.hypot(p.x - L.hospital.x, p.y - L.hospital.y) < 64) {
       healAt('ST. PALM', TREAT_PRICE, t('heal.treat.ok'), t('heal.treat.broke'));
       return;
     }
@@ -1144,6 +1186,7 @@ function frame(now) {
     tickShot(g, dt);
     updateMissions(g, dt, g.time);
     updateCamera(dt);
+    updateGfx(g, dt);
     drawHUD(g);
     renderer.render(scene, camera);
     g.shotFrames = (g.shotFrames ?? 0) + 1;
@@ -1174,7 +1217,9 @@ function frame(now) {
       g.state = 'play';
     }
   } else if (g.state === 'play') {
-    if (input.tapped('KeyP')) {
+    if (economyBusy(g)) {
+      // A shop tray owns the frame: the world holds still behind it.
+    } else if (input.tapped('KeyP')) {
       g.state = 'paused';
     } else {
       // Camera control first: movement below reads the yaw settled here.
@@ -1188,6 +1233,7 @@ function frame(now) {
       // the player is waiting on for more than a few frames.
       const wdt = g.hitstop > 0 ? 0 : dt;
       if (g.hitstop > 0) g.hitstop = Math.max(0, g.hitstop - dt);
+      g.clock = (g.clock + dt) % DAY_SECONDS;
       if (g.transition?.kind === 'exit') {
         // Stepping out: from the seat to the kerb, rising out of the
         // drive pose while the reach comes down off the door. The
@@ -1272,6 +1318,7 @@ function frame(now) {
         seatDriverFigure(g, wdt, g.time);
       }
       if (input.tapped('KeyE')) handleInteract();
+      if (input.tapped('KeyC')) callCar(g);
       g.aimAngle = p.state === 'foot' ? computeAimAngle() : null;
       if (p.state !== 'foot') g.aimPoint = null;
       updateTraffic(g, wdt);
@@ -1282,6 +1329,7 @@ function frame(now) {
       updatePickups(g, wdt, g.time);
       updatePolice(g, wdt, g.time);
       updatePlayerCarHits(g);
+      updateEconomy(g, dt);
       updateMissions(g, wdt, g.time);
       updateInteractions(wdt);
       processEvents();
@@ -1312,6 +1360,7 @@ function frame(now) {
     if (g.toast.t <= 0) g.toast = null;
   }
   updateAudioState();
+  if (!shotName) updateAudio(g, dt);
   updateCamera(dt);
   syncResetBtn();
   syncLangToggle();
@@ -1320,6 +1369,7 @@ function frame(now) {
   // scenes returned above and never reach this, so their compositions
   // stay clean).
   computeTrafficWarnings(g);
+  updateGfx(g, dt);
   drawHUD(g);
   renderer.render(scene, camera);
   input.endFrame();

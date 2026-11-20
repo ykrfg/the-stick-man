@@ -311,6 +311,8 @@ export function buildWorld(scene, city) {
   const sun = new THREE.DirectionalLight(0xfff1d6, 1.6);
   sun.position.set(900, 1500, 500);
   scene.add(sun);
+  hemi.visible = false;
+  sun.visible = false;
   // Touch the gradient so toon materials compile with it from the first frame.
   toonGradient();
 
@@ -320,30 +322,44 @@ export function buildWorld(scene, city) {
   // overlapping surfaces may sit closer than that.
   const base = flatPlane(WORLD.width + 500, WORLD.height + 500, toonMat(0xb9c98d));
   base.position.set(WORLD.width / 2, -0.3, WORLD.height / 2);
+  base.receiveShadow = true;
   group.add(base);
   const sidewalkMat = toonMat(0xe8e2d0);
   for (const block of city.blocks) {
     if (block.row === 5) continue;
     const p = flatPlane(block.w, block.h, sidewalkMat);
     p.position.set(block.x + block.w / 2, 0, block.y + block.h / 2);
+    p.receiveShadow = true;
     group.add(p);
   }
   if (city.park) {
     const p = flatPlane(city.park.w, city.park.h, toonMat(0x8fce6e));
     p.position.set(city.park.x + city.park.w / 2, 0.14, city.park.y + city.park.h / 2);
+    p.receiveShadow = true;
     group.add(p);
   }
-  // Beach sand and the sea beyond the south edge.
+  // Beach sand; the sea itself is built and animated by gfx.js.
   const sand = flatPlane(WORLD.width, WORLD.height - city.beachY, toonMat(0xf2ddab));
   sand.position.set(WORLD.width / 2, 0.14, (city.beachY + WORLD.height) / 2);
+  sand.receiveShadow = true;
   group.add(sand);
-  const sea = flatPlane(WORLD.width + 900, 620, toonMat(0x3f9fd8));
-  sea.position.set(WORLD.width / 2, -0.75, WORLD.height + 300);
-  group.add(sea);
   // The pier: a wooden jetty reaching into the sea near the warehouse.
   const pierDeck = new THREE.Mesh(new THREE.BoxGeometry(84, 5, 430), toonMat(0xa97c50));
   pierDeck.position.set(3085, 2.5, WORLD.height - 190);
   group.add(pierDeck);
+  // Pilings under the deck: without them the jetty reads as a plank lying on
+  // the sand instead of a pier standing in the water.
+  const pilingMat = toonMat(0x6b4c33);
+  for (let pz = WORLD.height - 380; pz <= WORLD.height - 20; pz += 72) {
+    for (const px of [3085 - 32, 3085 + 32]) {
+      const pile = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.6, 34, 6), pilingMat);
+      pile.position.set(px, -14, pz);
+      group.add(pile);
+    }
+  }
+  const pierRail = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 420), toonMat(0x8a6242));
+  pierRail.position.set(3085 + 41, 7, WORLD.height - 190);
+  group.add(pierRail);
 
   // Roads: one textured plane per avenue and street, plain squares on
   // crossings. Avenues and streets share one level and the crossing squares
@@ -356,6 +372,7 @@ export function buildWorld(scene, city) {
   for (const avenue of ROAD.avenues) {
     const p = flatPlane(ROAD.width, WORLD.height, vRoadMat);
     p.position.set(avenue, 0.28, WORLD.height / 2);
+    p.receiveShadow = true;
     group.add(p);
   }
   const hTex = makeRoadTexture(true);
@@ -364,6 +381,7 @@ export function buildWorld(scene, city) {
   for (const street of ROAD.streets) {
     const p = flatPlane(WORLD.width, ROAD.width, hRoadMat);
     p.position.set(WORLD.width / 2, 0.28, street);
+    p.receiveShadow = true;
     group.add(p);
   }
   const asphaltMat = new THREE.MeshToonMaterial({
@@ -377,6 +395,7 @@ export function buildWorld(scene, city) {
     for (const street of ROAD.streets) {
       const p = flatPlane(ROAD.width, ROAD.width, asphaltMat);
       p.position.set(avenue, 0.42, street);
+      p.receiveShadow = true;
       group.add(p);
     }
   }
@@ -393,6 +412,7 @@ export function buildWorld(scene, city) {
   const towerRoofMat = toonMat(0x707880);
   const metalMat = toonMat(0x3a3f46);
   const stepMat = toonMat(0xcac2ae);
+  const windowMats = [];
   for (const b of city.buildings) {
     const hgt = b.height * 1.9;
     const cx = b.x + b.w / 2;
@@ -409,6 +429,7 @@ export function buildWorld(scene, city) {
       : toonMat(new THREE.Color(b.wall).getHex());
     const narrowMat = faceMat(narrow);
     const wideMat = faceMat(wide);
+    windowMats.push(wideMat, narrowMat);
     // The box stops 0.4 short of the full height so its top face is not
     // exactly coplanar with the parapet slab's underside.
     const box = new THREE.Mesh(
@@ -416,6 +437,7 @@ export function buildWorld(scene, city) {
       [narrowMat, narrowMat, roofMat, roofMat, wideMat, wideMat],
     );
     box.position.set(cx, (hgt - 0.4) / 2, cz);
+    box.castShadow = true;
     group.add(box);
     // Parapet: the familiar cap slab, in the building's trim colour, with a
     // slightly inset roof deck on top wearing a varied flat roof tone.
@@ -540,6 +562,75 @@ export function buildWorld(scene, city) {
   pad.position.set(zone.x + zone.w / 2, 0.56, zone.y + zone.h / 2);
   group.add(pad);
 
+  // PALMERA MOTORS: three painted bays under a slim canopy. Posts stand at
+  // the four corners of the roof so it reads as a carport, never as a slab
+  // hovering over the lot (it is in frame in the pier mission shot).
+  const lot = city.motorsLot || [];
+  if (lot.length) {
+    const bayMat = basicMat(0xf7f3df);
+    for (const spot of lot) {
+      for (const side of [-30, 30]) {
+        const line = new THREE.Mesh(new THREE.BoxGeometry(3, 0.6, 70), bayMat);
+        line.position.set(spot.x + side, 0.72, spot.y - 24);
+        group.add(line);
+      }
+    }
+    const midX = (lot[0].x + lot[lot.length - 1].x) / 2;
+    const midZ = lot[0].y - 20;
+    const pad = flatPlane(330, 110, new THREE.MeshToonMaterial({
+      color: 0xb9bcc2, gradientMap: toonGradient(),
+      polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
+    }));
+    pad.position.set(midX, 0.58, midZ);
+    pad.receiveShadow = true;
+    group.add(pad);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(300, 4, 92), toonMat(0xdcdfe3));
+    roof.position.set(midX, 45, midZ);
+    roof.castShadow = true;
+    group.add(roof);
+    const trim = new THREE.Mesh(new THREE.BoxGeometry(306, 1.6, 98), toonMat(0x9aa1a6));
+    trim.position.set(midX, 42.4, midZ);
+    group.add(trim);
+    const postMat = toonMat(0xc9ced6);
+    for (const px of [midX - 142, midX + 142]) {
+      for (const pz of [midZ - 40, midZ + 40]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.3, 45, 8), postMat);
+        post.position.set(px, 22.5, pz);
+        post.castShadow = true;
+        group.add(post);
+      }
+    }
+  }
+
+  // The fixer's phone booth on the PD corner: a dark box with a lit front,
+  // so the one paid way out of a wanted level is findable at night.
+  const fixerSpot = city.landmarks.fixer;
+  if (fixerSpot) {
+    const booth = new THREE.Mesh(new THREE.BoxGeometry(20, 46, 20), toonMat(0x2c3f5e));
+    booth.position.set(fixerSpot.x, 23, fixerSpot.y);
+    group.add(booth);
+    const pane = new THREE.Mesh(new THREE.BoxGeometry(14, 28, 0.6), basicMat(0xffe9a8));
+    pane.position.set(fixerSpot.x, 25, fixerSpot.y - 10.2);
+    group.add(pane);
+    const signBox = new THREE.Mesh(new THREE.BoxGeometry(26, 7, 4), basicMat(0xffd94d));
+    signBox.position.set(fixerSpot.x, 49, fixerSpot.y - 8);
+    group.add(signBox);
+    const glow = new THREE.PointLight(0xffd98b, 1.1, 140);
+    glow.position.set(fixerSpot.x, 30, fixerSpot.y - 22);
+    group.add(glow);
+  }
+
+  // The safehouse door: one warm lamp over the step, so "home" reads at night.
+  const safeSpot = city.landmarks.safehouse;
+  if (safeSpot) {
+    const lamp = new THREE.Mesh(new THREE.SphereGeometry(3.4, 8, 6), basicMat(0xffe9b0));
+    lamp.position.set(safeSpot.x, 34, safeSpot.y - 8);
+    group.add(lamp);
+    const halo = new THREE.PointLight(0xffd98b, 0.9, 120);
+    halo.position.set(safeSpot.x, 30, safeSpot.y - 18);
+    group.add(halo);
+  }
+
   // Trees and palms.
   const trunkMat = toonMat(0x8a5a33);
   const leafMat = toonMat(0x4da653);
@@ -580,7 +671,7 @@ export function buildWorld(scene, city) {
     });
   });
 
-  return { group };
+  return { group, windowMats };
 }
 
 /**

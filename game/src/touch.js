@@ -37,6 +37,7 @@ export function initTouch(g) {
   const btnShoot = $('btnShoot');
   const btnSprint = $('btnSprint');
   const btnDash = $('btnDash');
+  const btnCall = $('btnCall');
 
   // --- Virtual joystick: dynamic origin wherever the left thumb lands. ---
   let stickId = null;
@@ -107,6 +108,16 @@ export function initTouch(g) {
   hold(btnShoot, 'KeyK');
   // Dash rides the Space code, exactly like the desktop key.
   hold(btnDash, 'Space');
+  // CALL is a tap: the same KeyC the keyboard uses to summon your own car.
+  btnCall.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    input.pressButton('KeyC');
+    input.releaseButton('KeyC');
+  }, { passive: false });
+  btnCall.addEventListener('click', () => {
+    input.pressButton('KeyC');
+    input.releaseButton('KeyC');
+  });
   // Pause is a tap, not a hold.
   btnPause.addEventListener('touchstart', (e) => {
     e.preventDefault();
@@ -185,6 +196,7 @@ export function initTouch(g) {
     btnShoot.textContent = t('touch.shoot');
     btnSprint.textContent = t('touch.sprint');
     btnDash.textContent = t('touch.dash');
+    btnCall.textContent = t('touch.call');
     lastState = ''; // force update() to re-derive the state button's label
     lastPrompt = null; // and the USE button's
   }
@@ -219,6 +231,8 @@ export function initTouch(g) {
     // Dash lives on foot only; in a car the same button is the
     // handbrake (both write Space), so it stays up with its label
     // switched. It dims while the on-foot dash cools down.
+    // CALL only means something once you own a car, and only in play.
+    btnCall.style.display = state === 'play' && (g.saveData.owned ?? []).length > 0 ? 'flex' : 'none';
     const onFoot = state === 'play' && g.player.state === 'foot';
     const driving = state === 'play' && g.player.state === 'car' && !!g.player.car;
     btnDash.style.display = onFoot || driving ? 'flex' : 'none';

@@ -4,9 +4,10 @@
 // network lane by lane, the player's arcade driving, and the shared collision
 // resolution (buildings, other cars, pedestrians) that police cars reuse.
 import * as THREE from 'three';
-import { CAR, COURIER_HP, CRASH_DAMAGE, CRASH_GRACE, PLAYER, ROAD, TRAFFIC_WARN, TRAFFIC_YIELD, WORLD, WRECK_BURN } from './config.js';
+import { CAR, COURIER_HP, CRASH_DAMAGE, CRASH_GRACE, MOTORS, NEON, PLAYER, ROAD, TRAFFIC_WARN, TRAFFIC_YIELD, WORLD, WRECK_BURN } from './config.js';
 import { clampToWorld, resolveCircleCollision } from './city.js';
-import { toonMat, basicMat } from './stick3d.js';
+import { basicMat, toonMat } from './stick3d.js';
+import { makeGlowSprite, nightLevel } from './gfx.js';
 
 export const CAR_COLORS = [0xef6461, 0xffd166, 0x7fb5d5, 0xa8d08d, 0xf4a7c3, 0xff8a5c, 0x95d5b2, 0xf6bd60, 0xc77dff, 0xeeeeee];
 
@@ -56,8 +57,14 @@ export function makeCarMesh(colorHex, police = false) {
   const tailR = tailL.clone();
   tailR.position.z = -7.5;
   group.add(headL, headR, tailL, tailR);
+  // A soft bloom on the nose: headlights are what reads on a night street.
+  const beam = makeGlowSprite(72, 0xffe6a8);
+  beam.position.set(30, 10, 0);
+  group.add(beam);
   let lightL = null;
   let lightR = null;
+  let glowL = null;
+  let glowR = null;
   if (police) {
     const bar = new THREE.Mesh(new THREE.BoxGeometry(13, 2.6, 9), basicMat(0x23232b));
     bar.position.set(-2, 21.2, 0); // sunk into the cabin roof, not resting exactly on it
@@ -68,8 +75,14 @@ export function makeCarMesh(colorHex, police = false) {
     lightR = new THREE.Mesh(bulbGeo, basicMat(0x2f7bff));
     lightR.position.set(-2, 24.4, -3.2);
     group.add(lightL, lightR);
+    // The bar itself blooms red and blue, and the two alternate.
+    glowL = makeGlowSprite(64, 0xff3b30);
+    glowL.position.set(-2, 24.4, 3.2);
+    glowR = makeGlowSprite(64, 0x2f7bff);
+    glowR.position.set(-2, 24.4, -3.2);
+    group.add(glowL, glowR);
   }
-  return { group, wheels, lightL, lightR };
+  return { group, wheels, lightL, lightR, beam, glowL, glowR };
 }
 
 function baseCar(kind, x, y, angle, colorHex) {
@@ -83,6 +96,10 @@ function baseCar(kind, x, y, angle, colorHex) {
     wheels: mesh.wheels,
     lightL: mesh.lightL,
     lightR: mesh.lightR,
+    beam: mesh.beam,
+    glowL: mesh.glowL,
+    glowR: mesh.glowR,
+    sirenT: 0,
     occupant: null, // 'player', a ped object, or null
     hp: 100,
     // Knock velocity from a hard car-to-car hit (see collideCars): a free
@@ -146,6 +163,16 @@ export function syncCarMesh(car, dt) {
   car.mesh.rotation.x = car.wrecked ? 0 : car.lean;
   car.mesh.rotation.z = car.wrecked ? 0.07 : 0;
   car.wheelSpin += (car.speed * dt) / 5.6;
+  // Night-only light bloom: headlights always, the patrol bar alternating.
+  const night = nightLevel();
+  if (car.beam) car.beam.material.opacity = car.wrecked ? 0 : night * 0.6;
+  if (car.glowL && car.lightL) {
+    car.sirenT = (car.sirenT ?? 0) + dt;
+    const on = car.lightL.visible && !car.wrecked;
+    const phase = Math.floor(car.sirenT * 3.4) % 2 === 0;
+    car.glowL.material.opacity = on ? night * (phase ? 0.95 : 0.08) : 0;
+    car.glowR.material.opacity = on ? night * (phase ? 0.08 : 0.95) : 0;
+  }
   for (const wheel of car.wheels) wheel.rotation.z = -car.wheelSpin;
 }
 
@@ -335,40 +362,6 @@ export function wreckCar(g, car) {
   syncCarMesh(car, 0);
 }
 
-/**
- * Apply damage to a car; crossing to zero enters the wreck state. When
- * the PLAYER's car is wrecked out from under him, a 'playerwreck' event
- * lets main.js run the forced-exit flow (the same one flying fists use).
- */
-export function damageCar(g, car, amount) {
-  if (car.wrecked || !(amount > 0)) return;
-  car.hp = Math.max(0, car.hp - amount);
-  if (car.hp <= 0) {
-    wreckCar(g, car);
-    if (car.occupant === 'player') g.events.push({ type: 'playerwreck', car });
-  }
-}
-
-/**
- * Crash damage (car-to-car and wall impacts) goes through here, never
- * through damageCar directly: after a car takes a crash hit it is
- * immune to further CRASH damage for CRASH_GRACE seconds. A pile-up or
- * a wall grind holds the contact for many frames, and ungated every
- * frame took another hit — one accident drained the whole HP bar in
- * about a second. The window is per car and timestamped against g.time
- * because parked cars have no update loop to tick a timer down. It
- * gates ONLY the HP: the impact's bounce, shove, speed cut and crash
- * event (sound/shake/heat) still happen on every contact frame, so the
- * driving feel is unchanged. Fist and bullet damage (damageCar from
- * main.js and combat.js) keeps its own pacing and never comes here.
- */
-export function crashDamageCar(g, car, amount) {
-  if (car.wrecked || !(amount > 0)) return;
-  if (g.time < (car.crashGraceUntil ?? 0)) return;
-  car.crashGraceUntil = g.time + CRASH_GRACE;
-  damageCar(g, car, amount);
-}
-
 // --- Wreck fire ---------------------------------------------------------
 // A wreck burns so "destroyed" reads at a glance, then leaves the world
 // so a dead car cannot block a lane forever. The whole show is sprites
@@ -472,10 +465,11 @@ function isMissionCritical(g, car) {
 /**
  * Run every wreck's afterlife for one frame: flames up while it burns,
  * dying down at the end of WRECK_BURN.burn, then the sink and removal
- * over WRECK_BURN.fade — except mission-critical wrecks and any wreck
- * still occupied, which stay in the world as plain wrecks. A traffic
- * wreck that leaves is replaced off-screen, the same bargain
- * updateTraffic makes when it despawns a distant car.
+ * over WRECK_BURN.fade — except mission-critical wrecks, player-owned
+ * wrecks (bought cars never despawn; the desk un-wrecks them for a fee)
+ * and any wreck still occupied, which stay in the world as plain
+ * wrecks. A traffic wreck that leaves is replaced off-screen, the same
+ * bargain updateTraffic makes when it despawns a distant car.
  */
 export function updateWrecks(g, dt) {
   for (const car of [...g.cars]) {
@@ -520,7 +514,7 @@ export function updateWrecks(g, dt) {
     }
     // The fire is out.
     if (car.fireFx) removeFireFx(g, car);
-    if (isMissionCritical(g, car) || car.occupant) continue; // stays a plain wreck
+    if (isMissionCritical(g, car) || car.owned || car.occupant) continue; // stays a plain wreck
     car.sinkY = Math.min(1, (car.burnT - WRECK_BURN.burn) / WRECK_BURN.fade) * 27;
     syncCarMesh(car, 0);
     if (car.burnT >= WRECK_BURN.burn + WRECK_BURN.fade) {
@@ -529,6 +523,40 @@ export function updateWrecks(g, dt) {
       if (replace) spawnTrafficCar(g);
     }
   }
+}
+
+/**
+ * Apply damage to a car; crossing to zero enters the wreck state. When
+ * the PLAYER's car is wrecked out from under him, a 'playerwreck' event
+ * lets main.js run the forced-exit flow (the same one flying fists use).
+ */
+export function damageCar(g, car, amount) {
+  if (car.wrecked || !(amount > 0)) return;
+  car.hp = Math.max(0, car.hp - amount);
+  if (car.hp <= 0) {
+    wreckCar(g, car);
+    if (car.occupant === 'player') g.events.push({ type: 'playerwreck', car });
+  }
+}
+
+/**
+ * Crash damage (car-to-car and wall impacts) goes through here, never
+ * through damageCar directly: after a car takes a crash hit it is
+ * immune to further CRASH damage for CRASH_GRACE seconds. A pile-up or
+ * a wall grind holds the contact for many frames, and ungated every
+ * frame took another hit — one accident drained the whole HP bar in
+ * about a second. The window is per car and timestamped against g.time
+ * because parked cars have no update loop to tick a timer down. It
+ * gates ONLY the HP: the impact's bounce, shove, speed cut and crash
+ * event (sound/shake/heat) still happen on every contact frame, so the
+ * driving feel is unchanged. Fist and bullet damage (damageCar from
+ * main.js and combat.js) keeps its own pacing and never comes here.
+ */
+export function crashDamageCar(g, car, amount) {
+  if (car.wrecked || !(amount > 0)) return;
+  if (g.time < (car.crashGraceUntil ?? 0)) return;
+  car.crashGraceUntil = g.time + CRASH_GRACE;
+  damageCar(g, car, amount);
 }
 
 /**
@@ -780,15 +808,16 @@ export function drivePlayerCar(g, dt) {
   // coasting from top speed, and with W held the engine simply out-pulled
   // it — the car stayed pinned at max speed, which is exactly what the
   // player reported as "the brake doesn't work".
+  const a0 = Math.abs(car.speed);
   const handbrake = g.input.down('Space');
   if (handbrake) {
     const step = CAR.handbrake * dt;
     car.speed = Math.abs(car.speed) <= step ? 0 : car.speed - Math.sign(car.speed) * step;
   } else if (throttle > 0) {
-    car.speed = Math.min(CAR.maxSpeed, car.speed + CAR.accel * dt);
+    car.speed = Math.min(car.maxSpeed ?? CAR.maxSpeed, car.speed + (car.accel ?? CAR.accel) * dt);
   } else if (throttle < 0) {
     if (car.speed > 12) car.speed = Math.max(0, car.speed - CAR.brake * dt);
-    else car.speed = Math.max(-CAR.maxReverse, car.speed - CAR.accel * 0.7 * dt);
+    else car.speed = Math.max(-CAR.maxReverse, car.speed - (car.accel ?? CAR.accel) * 0.7 * dt);
   } else {
     car.speed -= car.speed * 0.5 * dt;
     if (Math.abs(car.speed) < 4) car.speed = 0;
@@ -821,6 +850,14 @@ export function drivePlayerCar(g, dt) {
   if (sliding && car.skidT <= 0) {
     car.skidT = 0.42;
     g.events.push({ type: 'screech', strength: Math.min(1, speedAbs / 380) });
+  }
+  // Brake-pedal SE, once per 0.35 s: the long screech above 240, the short
+  // one below it.
+  const braking = handbrake || (throttle < 0 && car.speed > a0);
+  car.brakeT = Math.max(0, (car.brakeT ?? 0) - dt);
+  if (braking && speedAbs > 150 && car.brakeT <= 0) {
+    car.brakeT = 0.35;
+    g.events.push({ type: speedAbs > 240 ? 'brakeLong' : 'brake' });
   }
   moveFreeCar(g, car, dt);
   // The player rides inside: keep the figure glued to the driver's seat.
@@ -1147,7 +1184,70 @@ export function computeTrafficWarnings(g) {
 /** Flash the police light bars (called for every police car each frame). */
 export function updatePoliceLights(car, time) {
   if (!car.lightL || !car.lightR) return;
-  const phase = Math.floor(time * 5) % 2 === 0;
+  const phase = Math.floor(time * 5 + (Math.abs(car.x) % 4)) % 2 === 0;
   car.lightL.visible = phase;
   car.lightR.visible = !phase;
+  // The bar's bloom follows the same beat, so the red and blue halves take
+  // turns lighting up the street instead of glowing together.
+  const night = nightLevel();
+  if (car.glowL) car.glowL.material.opacity = car.wrecked ? 0 : night * (phase ? 0.95 : 0.08);
+  if (car.glowR) car.glowR.material.opacity = car.wrecked ? 0 : night * (phase ? 0.08 : 0.95);
+}
+
+/* ------------------------------------------------------------- owned cars */
+
+/**
+ * Apply an owned-car spec (saved grade/paint/engine/armor/neon) to a fresh
+ * car: grade sets the top speed and acceleration, engine multiplies both,
+ * armor adds HP over the 100 a plain car has.
+ */
+export function applyCarSpec(car, spec) {
+  const grade = MOTORS.grades[spec.grade] ?? MOTORS.grades[0];
+  const eng = spec.engine > 0 ? (MOTORS.engine[spec.engine - 1] ?? null) : null;
+  car.maxSpeed = grade.top * (eng?.top ?? 1);
+  car.accel = grade.accel * (eng?.accel ?? 1);
+  car.hp = 100 + (spec.armor > 0 ? (MOTORS.armor[spec.armor - 1]?.hp ?? 0) : 0);
+  car.maxHp = car.hp;
+  car.owned = true;
+  car.grade = spec.grade;
+  car.engine = spec.engine;
+  car.armor = spec.armor;
+  car.paint = spec.paint;
+  recolorCar(car, spec.paint);
+  if (spec.neon !== null && spec.neon !== undefined) setCarNeon(car, spec.neon);
+}
+
+/** Paint the body: an owned car keeps its colour across a respawn. */
+export function recolorCar(car, paintIndex) {
+  const color = MOTORS.paints[paintIndex] ?? MOTORS.paints[0];
+  const body = car.mesh.children[0];
+  if (body?.material) body.material.color.setHex(color);
+  car.paint = paintIndex;
+}
+
+
+/** Underbody neon: two glowing sills and a soft point light, or off. */
+export function setCarNeon(car, index) {
+  if (car.neonGroup) {
+    car.mesh.remove(car.neonGroup);
+    car.neonGroup = null;
+  }
+  car.neon = null;
+  const tone = NEON[index];
+  if (!tone) return;
+  const group = new THREE.Group();
+  const mat = new THREE.MeshBasicMaterial({
+    color: tone.color, transparent: true, opacity: 0.9, depthWrite: false,
+  });
+  for (const side of [-1, 1]) {
+    const sill = new THREE.Mesh(new THREE.BoxGeometry(40, 1.2, 3.2), mat);
+    sill.position.set(0, 2.2, side * 11);
+    group.add(sill);
+  }
+  const light = new THREE.PointLight(tone.color, 1.4, 130);
+  light.position.set(0, 3, 0);
+  group.add(light);
+  car.mesh.add(group);
+  car.neonGroup = group;
+  car.neon = index;
 }
