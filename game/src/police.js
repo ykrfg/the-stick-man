@@ -6,7 +6,7 @@
 // readable: fast in a straight line, clumsy in corners, hopeless off-road.
 import { CAR, HEAT_THRESHOLDS } from './config.js';
 import { isOnRoad } from './city.js';
-import { moveFreeCar, removeCar, spawnPoliceCar, syncCarMesh, updatePoliceLights } from './vehicles.js';
+import { moveFreeCar, removeCar, spawnPoliceCar, updatePoliceLights } from './vehicles.js';
 import { spawnPed } from './people.js';
 
 /** How many stars a heat value lights up. */
@@ -145,6 +145,11 @@ function chaseOnFoot(g, car, dt) {
 /** Steer one police car after the player for a frame. */
 function chasePlayer(g, car, dt) {
   const p = g.player;
+  // Chasing is not a drive-off either: the stall watch in the
+  // stand-down branch starts fresh when the heat next dies.
+  car.offAnchor = null;
+  car.offWindow = 0;
+  car.offStuck = 0;
   // On foot, the arrest happens on foot: the car stops and deploys.
   // In a car, the chase is a chase — ramming included — as before.
   if (p.state === 'foot') {
@@ -259,13 +264,41 @@ export function updatePolice(g, dt, time) {
         const step = 500 * dt;
         car.speed = Math.abs(car.speed) <= step ? 0 : car.speed - Math.sign(car.speed) * step;
         moveFreeCar(g, car, dt);
+        // Holding at the kerb is not a drive-off: the stall watch in
+        // the drive-off branch starts fresh once he boards.
+        car.offAnchor = null;
+        car.offWindow = 0;
+        car.offStuck = 0;
       } else {
         // The heat is gone: drive off and despawn in the distance.
+        // The drive goes through moveFreeCar — the collision-aware
+        // move the hold above already uses — so a withdrawing cruiser
+        // is stopped and slid by buildings like any other car. (It
+        // used to integrate its position directly here and ghost
+        // straight through walls.) The removal stays distance-based,
+        // with one bound: a cruiser wedged against a facade makes no
+        // progress, so its stall is measured in 1-second windows and
+        // after ~4 game-seconds of going nowhere it is towed out of
+        // the world — a despawn either way, just sooner.
         car.speed = Math.min(CAR.trafficSpeed, car.speed + 200 * dt);
-        car.x += Math.cos(car.angle) * car.speed * dt;
-        car.y += Math.sin(car.angle) * car.speed * dt;
-        syncCarMesh(car, dt);
-        if (Math.hypot(car.x - p.x, car.y - p.y) > 780) removeCar(g, car);
+        moveFreeCar(g, car, dt);
+        if (Math.hypot(car.x - p.x, car.y - p.y) > 780) {
+          removeCar(g, car);
+        } else {
+          if (!car.offAnchor) {
+            car.offAnchor = { x: car.x, y: car.y };
+            car.offWindow = 0;
+            car.offStuck = 0;
+          }
+          car.offWindow += dt;
+          if (car.offWindow >= 1) {
+            const moved = Math.hypot(car.x - car.offAnchor.x, car.y - car.offAnchor.y);
+            car.offStuck = moved < 40 ? (car.offStuck ?? 0) + 1 : 0;
+            car.offAnchor = { x: car.x, y: car.y };
+            car.offWindow = 0;
+            if (car.offStuck >= 4) removeCar(g, car);
+          }
+        }
       }
     } else {
       chasePlayer(g, car, dt);

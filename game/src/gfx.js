@@ -101,6 +101,7 @@ let level = 2;
 let windowMats = [];
 let fpsFrames = 0;
 let fpsTime = 0;
+let goodStreak = 0;
 let haloTex = null;
 const halos = [];
 
@@ -562,13 +563,25 @@ export function update(g, dt) {
   key.position.set(p.x + env.dir.x * 900, env.dir.y * 900, p.y + env.dir.z * 900);
   key.target.position.set(p.x, 0, p.y);
   key.target.updateMatrixWorld();
-  key.castShadow = env.shadow > 0.45 && level > 0;
+  // Shadows belong to every hour: the moon is a real key light at night
+  // (its direction is flipped in time.js precisely so night shadows
+  // exist), so castShadow must never be gated on the time-of-day
+  // envelope. The old `env.shadow > 0.45` term could not fire anyway —
+  // the envelope bottoms out at 0.62 — but leaving an hour-based gate
+  // here invites exactly the "shadows vanish at night" pop. Quality
+  // level is the only switch (round #23).
+  key.castShadow = level > 0;
 
   for (const palm of palms) {
     palm.rotation.z = Math.sin(g.time * 0.6 + palm.position.x * 0.01) * 0.018;
   }
   // Automatic quality: two and a half seconds under 42 fps drops one rung.
   // Stills pin the top rung, so a screenshot never changes on its own.
+  // The ladder also climbs back (round #23): three consecutive windows
+  // above 50 fps restore one rung. It used to ratchet down only, so a
+  // transient dip — a heavy night scene is the classic case — cost the
+  // shadow map for the rest of the session: at level 0 shadows are off
+  // entirely, which read as "building shadows disappear at night".
   if (g.shotHour === null || g.shotHour === undefined) {
     fpsFrames += 1;
     fpsTime += Math.min(0.1, dt);
@@ -576,7 +589,18 @@ export function update(g, dt) {
       const fps = fpsFrames / fpsTime;
       fpsFrames = 0;
       fpsTime = 0;
-      if (fps < 42 && level > 0) setQuality(level - 1);
+      if (fps < 42 && level > 0) {
+        setQuality(level - 1);
+        goodStreak = 0;
+      } else if (fps > 50 && level < 2) {
+        goodStreak += 1;
+        if (goodStreak >= 3) {
+          setQuality(level + 1);
+          goodStreak = 0;
+        }
+      } else {
+        goodStreak = 0;
+      }
     }
   }
   // The sea scrolls by wall-clock dt in live play only: a ?shot= still

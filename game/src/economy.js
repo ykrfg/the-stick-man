@@ -11,9 +11,9 @@ import * as THREE from 'three';
 import {
   FIXER, GEAR, MEAL_PRICE, MOTORS, NEON, OUTFIT, PLAYER, SAFEHOUSE, THEFT,
 } from './config.js';
-import { t } from './i18n.js';
+import { getLang, t } from './i18n.js';
 import { jobAvailable, missionAvailable } from './missions.js';
-import { applyCarSpec, removeCar, spawnCar } from './vehicles.js';
+import { applyCarSpec, recolorCar, removeCar, setCarNeon, spawnCar } from './vehicles.js';
 
 let g = null;
 let tray = null;
@@ -152,8 +152,8 @@ function buyGrade(gradeIndex) {
   }
   if (!spend(grade.price)) return;
   const spec = {
-    grade: gradeIndex, paint: 0, engine: 0, armor: 0, neon: null,
-    stolen: false, stolenX: null, stolenY: null,
+    grade: gradeIndex, paint: 0, paints: [0], engine: 0, armor: 0, neon: null,
+    glow: true, stolen: false, stolenX: null, stolenY: null,
   };
   g.saveData.owned.push(spec);
   deliverBought(spec, g.saveData.owned.length - 1);
@@ -174,10 +174,9 @@ function tune(kind) {
   const spec = g.saveData.owned[slot];
   const grade = MOTORS.grades[spec.grade];
   if (kind === 'paint') {
-    if (!spend(MOTORS.paint)) return;
-    spec.paint = (spec.paint + 1) % MOTORS.paints.length;
-    refreshCar(slot);
-    commit();
+    // Legacy entry point kept for safety; the desk rows call paintCar
+    // with an explicit colour now (see below).
+    paintCar(slot, (spec.paint + 1) % MOTORS.paints.length);
     return;
   }
   if (kind === 'engine') {
@@ -205,6 +204,26 @@ function tune(kind) {
     commit();
   }
   void grade;
+}
+
+/**
+ * Paint one owned car a chosen colour (round #23 ownership model):
+ * a colour the car does not own yet costs the desk price once and joins
+ * its owned set; a colour it already owns is re-applied FREE — at this
+ * desk and from the pause screen alike. Ownership is per car, like the
+ * engine and armour tiers.
+ */
+function paintCar(slot, colour) {
+  const spec = g.saveData.owned?.[slot];
+  if (!spec || colour < 0 || colour >= MOTORS.paints.length) return;
+  if (!Array.isArray(spec.paints)) spec.paints = [spec.paint];
+  if (!spec.paints.includes(colour)) {
+    if (!spend(MOTORS.paint)) return;
+    spec.paints.push(colour);
+  }
+  spec.paint = colour;
+  refreshCar(slot);
+  commit();
 }
 
 /* ---------------------------------------------------------------- ammo hut */
@@ -239,8 +258,16 @@ function buyGear(kind) {
 
 function buyOutfit(kind, arg) {
   const fit = g.saveData.fit;
+  // Ownership (round #23): fit.own records what has been BOUGHT; the
+  // fit[key] fields themselves are only what is WORN. (Before this, the
+  // worn flag doubled as the owned flag, so taking a piece off and
+  // putting it back on charged the full price again — the HOW TO PLAY
+  // page always promised "bought once, worn whenever you like".)
+  if (!fit.own) {
+    fit.own = { scarf: fit.scarf === true, hat: fit.hat === true, shades: fit.shades === true };
+  }
   if (kind === 'color') {
-    if (!fit.scarf) return;
+    if (!fit.own.scarf) return;
     fit.color = arg;
     g.player.fig.setFit(fit);
     g.sfx.uiBlip();
@@ -248,16 +275,16 @@ function buyOutfit(kind, arg) {
     return;
   }
   const key = kind;
-  const price = OUTFIT[key];
-  if (fit[key]) {
-    // Bought already: wearing and taking off are free.
-    fit[key] = false;
+  if (fit.own[key]) {
+    // Owned already: wearing and taking off are free.
+    fit[key] = !fit[key];
     g.player.fig.setFit(fit);
     g.sfx.uiBlip();
     commit();
     return;
   }
-  if (!spend(price)) return;
+  if (!spend(OUTFIT[key])) return;
+  fit.own[key] = true;
   fit[key] = true;
   g.player.fig.setFit(fit);
   g.sfx.confirm();
@@ -314,10 +341,20 @@ function rowsFor(kind) {
     } else {
       const spec = g.saveData.owned[slot];
       rows.push(noteRow(t('shop.motors.ownCar', { name: gradeName(MOTORS.grades[spec.grade].id) })));
-      rows.push({
-        label: t('shop.motors.paint'), right: cash(MOTORS.paint),
-        tag: `#${spec.paint + 1}`, bad: g.money < MOTORS.paint, on: () => tune('paint'),
-      });
+      // One row per paint colour: owned colours re-apply FREE, a new
+      // colour costs the paint price once (round #23 ownership model).
+      const ownedPaints = Array.isArray(spec.paints) ? spec.paints : [spec.paint];
+      for (let i = 0; i < MOTORS.paints.length; i += 1) {
+        const has = ownedPaints.includes(i);
+        rows.push({
+          label: t('shop.motors.paintN', { n: i + 1 }),
+          right: has ? t('shop.free') : cash(MOTORS.paint),
+          tag: spec.paint === i ? t('cust.current') : (has ? t('shop.owned') : null),
+          cls: spec.paint === i ? 'owned' : '',
+          bad: !has && g.money < MOTORS.paint,
+          on: () => paintCar(slot, i),
+        });
+      }
       const eng = spec.engine < MOTORS.engine.length ? MOTORS.engine[spec.engine] : null;
       rows.push(eng ? {
         label: t('shop.motors.engine', { n: spec.engine + 1 }),
@@ -366,24 +403,27 @@ function rowsFor(kind) {
       : { label: t('shop.ammo.shoes'), right: cash(GEAR.shoes), bad: g.money < GEAR.shoes, on: () => buyGear('shoes') });
   } else if (kind === 'outfit') {
     const fit = g.saveData.fit;
+    const own = fit.own || {
+      scarf: fit.scarf === true, hat: fit.hat === true, shades: fit.shades === true,
+    };
     for (const key of ['scarf', 'hat', 'shades']) {
       rows.push({
         label: t(`shop.outfit.${key}`),
-        right: fit[key] ? null : cash(OUTFIT[key]),
-        bad: !fit[key] && g.money < OUTFIT[key],
-        tag: fit[key] ? t('shop.wearing') : null,
-        cls: fit[key] ? 'owned' : '',
+        right: own[key] ? null : cash(OUTFIT[key]),
+        bad: !own[key] && g.money < OUTFIT[key],
+        tag: fit[key] ? t('shop.wearing') : (own[key] ? t('shop.owned') : null),
+        cls: own[key] ? 'owned' : '',
         on: () => buyOutfit(key),
       });
     }
-    if (!fit.scarf) rows.push(noteRow(t('shop.outfit.colorFree')));
+    if (!own.scarf) rows.push(noteRow(t('shop.outfit.colorFree')));
     for (let i = 0; i < OUTFIT.colors.length; i += 1) {
       rows.push({
         label: t('shop.outfit.color', { n: i + 1 }),
-        tag: fit.color === i ? t('shop.wearing') : null,
-        cls: fit.scarf && fit.color === i ? 'owned' : '',
-        on: fit.scarf ? () => buyOutfit('color', i) : null,
-        off: !fit.scarf,
+        tag: fit.color === i ? t('cust.current') : null,
+        cls: own.scarf && fit.color === i ? 'owned' : '',
+        on: own.scarf ? () => buyOutfit('color', i) : null,
+        off: !own.scarf,
       });
     }
   } else if (kind === 'safehouse') {
@@ -478,6 +518,198 @@ function closeShop() {
 /** True while a tray owns input; main.js skips the world for the frame. */
 export function economyBusy(game) {
   return !!game.shopOpen;
+}
+
+/* ------------------------------------------------------ pause CUSTOMIZE */
+// The pause screen's re-dressing panel (round #23): switch only what the
+// player already OWNS — outfit pieces and scarf colours, plus, while
+// driving one of their own cars, that car's owned paint colours and its
+// underglow switch. Nothing is sold here: buying still happens at the
+// Surf Shack and the Motors desk. Every change writes the SAME save
+// fields the shops write (saveData.fit, the car's spec), so the panel
+// and the shops can never disagree, and applies to the rig / car at
+// once. Paint applied from here only recolours — it never runs the full
+// applyCarSpec, so it cannot double as a free repair.
+
+let custPanel = null;
+let custBody = null;
+let custTitleEl = null;
+let custBackTop = null;
+let custBackBottom = null;
+let custIsOpen = false;
+let custLang = null;
+
+function buildCustomize() {
+  if (custPanel) return;
+  installStyle(); // the .smRow classes live in the shop stylesheet
+  if (!document.getElementById('smCustStyle')) {
+    const style = document.createElement('style');
+    style.id = 'smCustStyle';
+    style.textContent = `
+    #smCust { position:fixed; inset:0; z-index:60; display:none; overflow-y:auto;
+      -webkit-overflow-scrolling:touch; box-sizing:border-box;
+      padding:calc(12px + env(safe-area-inset-top)) 16px calc(22px + env(safe-area-inset-bottom));
+      background:rgba(10,13,22,0.94); font-family:system-ui,sans-serif; color:#f4f1e6; }
+    #smCust.show { display:block; }
+    #smCust .inner { max-width:560px; margin:0 auto; }
+    #smCustBody { display:flex; flex-direction:column; gap:6px; }
+    #smCust .head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:6px 0 4px; }
+    #smCust h1 { margin:0; color:#ffd94d; font-size:26px; font-weight:900; letter-spacing:1px; }
+    #smCust h2 { color:#ffd94d; font-size:15px; font-weight:800; letter-spacing:1px;
+      margin:16px 0 2px; padding-bottom:4px; border-bottom:2px solid rgba(255,217,77,0.35); }
+    #smCust .backBtn { padding:10px 22px; border-radius:999px; border:3px solid #17181c;
+      background:#ffd94d; color:#17181c; font:800 15px system-ui,sans-serif; white-space:nowrap;
+      cursor:pointer; touch-action:none; -webkit-user-select:none; user-select:none; }
+    #smCust .foot { text-align:center; margin:20px 0 4px; }
+    `;
+    document.head.appendChild(style);
+  }
+  custPanel = document.createElement('div');
+  custPanel.id = 'smCust';
+  custPanel.innerHTML = `
+    <div class="inner">
+      <div class="head"><h1 id="smCustTitle"></h1><button class="backBtn" id="smCustBack" type="button"></button></div>
+      <div id="smCustBody"></div>
+      <div class="foot"><button class="backBtn" id="smCustBack2" type="button"></button></div>
+    </div>`;
+  document.body.appendChild(custPanel);
+  custTitleEl = custPanel.querySelector('#smCustTitle');
+  custBody = custPanel.querySelector('#smCustBody');
+  custBackTop = custPanel.querySelector('#smCustBack');
+  custBackBottom = custPanel.querySelector('#smCustBack2');
+  const close = (event) => { event.preventDefault(); closeCustomize(); };
+  custBackTop.addEventListener('click', close);
+  custBackBottom.addEventListener('click', close);
+}
+
+function custRow(label, tag, on) {
+  const btn = document.createElement('button');
+  btn.className = 'smRow tap';
+  const left = document.createElement('span');
+  left.textContent = label;
+  btn.appendChild(left);
+  if (tag) {
+    const right = document.createElement('span');
+    right.className = 'smTag';
+    right.textContent = tag;
+    btn.appendChild(right);
+  }
+  btn.addEventListener('click', () => on());
+  return btn;
+}
+
+function custNote(text) {
+  const d = document.createElement('div');
+  d.className = 'smRow note';
+  d.textContent = text;
+  return d;
+}
+
+function custHead(text) {
+  const h = document.createElement('h2');
+  h.textContent = text;
+  return h;
+}
+
+function renderCustomize() {
+  if (!custPanel) return;
+  custLang = getLang();
+  custTitleEl.textContent = t('cust.title');
+  custBackTop.textContent = t('cust.back');
+  custBackBottom.textContent = t('cust.back');
+  custBody.replaceChildren();
+  const fit = g.saveData.fit;
+  const own = fit.own || {
+    scarf: fit.scarf === true, hat: fit.hat === true, shades: fit.shades === true,
+  };
+  custBody.appendChild(custHead(t('cust.outfit')));
+  if (!own.scarf && !own.hat && !own.shades) {
+    custBody.appendChild(custNote(t('cust.none')));
+  } else {
+    for (const key of ['scarf', 'hat', 'shades']) {
+      if (!own[key]) continue;
+      custBody.appendChild(custRow(
+        t(`shop.outfit.${key}`),
+        fit[key] ? t('cust.on') : t('cust.off'),
+        () => { fit[key] = !fit[key]; g.player.fig.setFit(fit); custCommit(); },
+      ));
+    }
+    if (own.scarf) {
+      for (let i = 0; i < OUTFIT.colors.length; i += 1) {
+        custBody.appendChild(custRow(
+          t('shop.outfit.color', { n: i + 1 }),
+          fit.color === i ? t('cust.current') : null,
+          () => { fit.color = i; g.player.fig.setFit(fit); custCommit(); },
+        ));
+      }
+    }
+  }
+  custBody.appendChild(custHead(t('cust.car')));
+  const car = g.player.state === 'car' ? g.player.car : null;
+  let slot = -1;
+  if (car && car.owned) {
+    slot = Number.isInteger(car.slot) ? car.slot
+      : (g.saveData.owned || []).findIndex((s, i) => carForSlot(i) === car);
+  }
+  const spec = slot >= 0 ? g.saveData.owned[slot] : null;
+  if (!spec) {
+    custBody.appendChild(custNote(t('cust.noCar')));
+  } else {
+    const paints = Array.isArray(spec.paints) ? spec.paints : [spec.paint];
+    for (const i of [...paints].sort((a, b) => a - b)) {
+      custBody.appendChild(custRow(
+        t('shop.motors.paintN', { n: i + 1 }),
+        spec.paint === i ? t('cust.current') : null,
+        () => { spec.paint = i; recolorCar(car, i); custCommit(); },
+      ));
+    }
+    if (spec.neon !== null && spec.neon !== undefined) {
+      custBody.appendChild(custRow(
+        t('cust.glow'),
+        spec.glow === false ? t('cust.off') : t('cust.on'),
+        () => {
+          spec.glow = spec.glow === false ? true : false;
+          setCarNeon(car, spec.glow ? spec.neon : -1);
+          custCommit();
+        },
+      ));
+    }
+  }
+}
+
+function custCommit() {
+  g.persist?.();
+  renderCustomize();
+}
+
+export function customizeOpen() {
+  return custIsOpen;
+}
+
+export function openCustomize() {
+  if (!g || g.shopOpen) return;
+  buildCustomize();
+  renderCustomize();
+  custPanel.scrollTop = 0;
+  custPanel.classList.add('show');
+  custIsOpen = true;
+  g.sfx.uiBlip();
+}
+
+export function closeCustomize() {
+  if (!custIsOpen) return;
+  custPanel.classList.remove('show');
+  custIsOpen = false;
+  // Never leave focus on a panel button: Enter would re-click it.
+  if (document.activeElement && custPanel.contains(document.activeElement)) {
+    document.activeElement.blur();
+  }
+  g.sfx.uiBlip();
+}
+
+/** Frame hook: a language switch while the panel is up re-renders it. */
+export function syncCustomize() {
+  if (custIsOpen && custLang !== getLang()) renderCustomize();
 }
 
 /** Keyboard in the tray: digits pick a row, Escape/E closes. */

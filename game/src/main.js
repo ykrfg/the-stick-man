@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import {
   CAR, DAY_SECONDS, DAY_START, HEAT_FOR, MEAL_PRICE, PLAYER, ROBBERY_COOLDOWN, ROBBERY_HEAT,
-  ROBBERY_TIME, SHOT_HOUR, SPRAY_PER_STAR, TREAT_PRICE,
+  ROBBERY_RADIUS, ROBBERY_TIME, SHOT_HOUR, SPRAY_PER_STAR, TREAT_PRICE,
 } from './config.js';
 import { makeRng } from './random.js';
 import { Input } from './input.js';
@@ -31,8 +31,9 @@ import { bindRenderer, initGfx, setQuality, update as updateGfx } from './gfx.js
 import { initAudio, updateAudio } from './audio-director.js';
 import { closeHowto, howtoOpen, initHowto, openHowto, syncHowto } from './howto.js';
 import {
-  callCar, economyBusy, economyInteract, fixerPrompt, initEconomy, resetEconomy, shopPrompt,
-  spawnOwnedCars, updateEconomy,
+  callCar, closeCustomize, customizeOpen, economyBusy, economyInteract, fixerPrompt,
+  initEconomy, openCustomize, resetEconomy, shopPrompt, spawnOwnedCars, syncCustomize,
+  updateEconomy,
 } from './economy.js';
 
 const params = new URLSearchParams(location.search);
@@ -125,6 +126,10 @@ const g = {
     init: false, yaw: 0, pitch: 0.42, dist: 200, zoomIdx: 2,
     manualT: 99, collDist: 1e9, backBlend: 0, lookBack: false, occluded: false,
     rescue: 0,
+    // Seconds left of the post-entry swing (see finishEnterCar): while
+    // this runs, the control step eases the yaw behind the car the
+    // player just climbed into, ahead of the movement auto-align.
+    entryAlignT: 0,
   },
   say(title, sub = '', dur = 3.4) {
     g.message = { title, sub, t: dur, dur };
@@ -360,6 +365,32 @@ function syncHowtoBtn() {
   howtoBtn.textContent = t('btn.howto');
 }
 
+// --- CUSTOMIZE entry (pause screen only, desktop and touch) ---
+// Opens economy.js's owned-items panel over the pause. The frame loop
+// gives the panel the keys while it is up (Esc / Enter / P close it back
+// to the pause, exactly like the HOW TO PLAY sheet), so a press can
+// never leak through into a resume.
+const customizeBtn = document.getElementById('btnCustomize');
+function pokeCustomize() {
+  customizeBtn.blur(); // Enter must never re-click it (see pokeReset)
+  if (g.state === 'paused') openCustomize();
+}
+customizeBtn.addEventListener('click', pokeCustomize);
+customizeBtn.addEventListener('touchstart', (event) => {
+  event.preventDefault();
+  pokeCustomize();
+}, { passive: false });
+
+let lastCustomizeBtnKey = '';
+function syncCustomizeBtn() {
+  const show = !shotName && g.state === 'paused' && !howtoOpen() && !customizeOpen();
+  const key = `${show}|${g.lang}`;
+  if (key === lastCustomizeBtnKey) return;
+  lastCustomizeBtnKey = key;
+  customizeBtn.style.display = show ? 'block' : 'none';
+  customizeBtn.textContent = t('btn.customize');
+}
+
 function resize() {
   const w = window.innerWidth;
   const h = window.innerHeight;
@@ -451,6 +482,13 @@ function finishEnterCar() {
   // threshold, as if it had been stolen).
   if (!car.owned) g.events.push({ type: 'crime', kind: 'stealCar', x: car.x, y: car.y });
   g.sfx.carDoor();
+  // Swing the camera behind the car he just climbed into (round #23):
+  // the on-foot yaw he arrived with can point anywhere, and until the
+  // movement auto-align caught up (its 1.1 s hands-off gate, then a
+  // 2.4/s ease) the first seconds of driving steered against a camera
+  // facing the wrong way. The control step runs this swing over the
+  // next ~0.3 s; a manual drag cancels it on the spot.
+  g.cam.entryAlignT = 0.35;
 }
 
 function exitCar() {
@@ -654,11 +692,18 @@ function processEvents() {
   g.events.length = 0;
 }
 
-/** Index of the shop whose doorstep zone the player is standing in, or -1. */
-function shopDoorIndex(p) {
+/**
+ * Index of the shop whose hold-up zone the player is standing in, or -1.
+ * The zone is the shop's whole frontage (ROBBERY_RADIUS around its door
+ * point), not a doorstep spot: a hold-up can be started from anywhere at
+ * the shop (round #23). The prompt chain and the E handler both read the
+ * world through this one function, so they can never disagree about
+ * where a hold-up may start.
+ */
+function shopZoneIndex(p) {
   for (let i = 0; i < g.city.shops.length; i += 1) {
     const s = g.city.shops[i];
-    if (Math.hypot(p.x - s.x, p.y - s.y) < 62) return i;
+    if (Math.hypot(p.x - s.x, p.y - s.y) < ROBBERY_RADIUS) return i;
   }
   return -1;
 }
@@ -707,12 +752,12 @@ function updateInteractions(dt) {
   if (p.state === 'foot') {
     const L = g.city.landmarks;
     if (g.robbery) {
-      // A hold-up in progress owns the prompt line: stand in the door
+      // A hold-up in progress owns the prompt line: stand in the shop
       // zone and watch it fill. Walking off is always an option — the
       // payout is forfeit, and that is the whole of the punishment.
       const r = g.robbery;
       const shop = g.city.shops[r.shop];
-      if (!shop || Math.hypot(p.x - shop.x, p.y - shop.y) > 84) {
+      if (!shop || Math.hypot(p.x - shop.x, p.y - shop.y) > ROBBERY_RADIUS) {
         g.robbery = null;
         g.say(t('banner.holdupOff.title'), t('banner.holdupOff.sub'), 2.4);
       } else {
@@ -750,8 +795,8 @@ function updateInteractions(dt) {
       // A mission grab spot (the courier's case, the raid's crate) owns
       // its prompt, ahead of the shop doors below.
       g.prompt = missionPrompt(g);
-    } else if (shopDoorIndex(p) >= 0) {
-      const si = shopDoorIndex(p);
+    } else if (shopZoneIndex(p) >= 0) {
+      const si = shopZoneIndex(p);
       if (shopBusy(si)) {
         // The mission owns this door: no robbery prompt, no note.
       } else if (robCooldownLeft(si) > 0) {
@@ -881,7 +926,7 @@ function handleInteract() {
       return;
     }
     if (missionInteract(g)) return; // a mission grab spot takes the press
-    const si = shopDoorIndex(p);
+    const si = shopZoneIndex(p);
     if (si >= 0 && !shopBusy(si) && robCooldownLeft(si) <= 0) {
       g.robbery = { shop: si, t: 0 };
       g.say(t('banner.holdup.title'), t('banner.holdup.sub', { shop: g.city.shops[si].name }), 2.2);
@@ -1023,6 +1068,9 @@ function updateCameraControl(dt) {
     cam.yaw += orb.dx * 0.0052;
     cam.pitch = Math.max(0.05, Math.min(1.3, cam.pitch + orb.dy * 0.0052));
     cam.manualT = 0;
+    // A drag is the player taking the camera: the post-entry swing
+    // (below) yields to it at once and does not resume afterwards.
+    cam.entryAlignT = 0;
   } else {
     cam.manualT += dt;
   }
@@ -1036,7 +1084,16 @@ function updateCameraControl(dt) {
   const lookBack = g.input.down('KeyQ') || g.input.middleDown;
   cam.lookBack = lookBack;
   const moving = inCar ? Math.abs(p.car.speed) > 45 : p.speedNow > 40;
-  if (moving && cam.manualT > 1.1 && !lookBack) {
+  if (cam.entryAlignT > 0) {
+    // Post-entry swing (round #23): for ~0.3 s after finishEnterCar,
+    // ease the yaw behind the car at a fast rate — movement or not, so
+    // the car is framed before the player even touches the throttle.
+    // Look-back still wins while held; the window simply runs out.
+    cam.entryAlignT = Math.max(0, cam.entryAlignT - dt);
+    if (inCar && !lookBack) {
+      cam.yaw += angleArc(cam.yaw, p.car.angle + Math.PI) * (1 - Math.exp(-14 * dt));
+    }
+  } else if (moving && cam.manualT > 1.1 && !lookBack) {
     const behind = inCar ? p.car.angle : (p.moveAngle ?? p.angle);
     const rate = inCar ? 2.4 : 1.7;
     cam.yaw += angleArc(cam.yaw, behind + Math.PI) * (1 - Math.exp(-rate * dt));
@@ -1239,7 +1296,13 @@ function frame(now) {
     return;
   }
 
-  if (howtoOpen()) {
+  if (customizeOpen()) {
+    // The CUSTOMIZE panel owns the keys while it is up (over the
+    // pause): a close key shuts it back to the pause menu, and the
+    // press that closes it must not also resume — one Esc press closes
+    // exactly one layer, the same rule as the HOW TO PLAY sheet below.
+    if (input.tapped('Escape', 'Enter', 'KeyP')) closeCustomize();
+  } else if (howtoOpen()) {
     // The HOW TO PLAY sheet owns the keys while it is up: a close key
     // shuts it, and nothing leaks into the title's start, the pause's
     // resume or a reset underneath. The world keeps rendering behind
@@ -1262,7 +1325,9 @@ function frame(now) {
   } else if (g.state === 'paused') {
     if (input.tapped('KeyR')) {
       pokeReset();
-    } else if (input.tapped('KeyP', 'Enter')) {
+    } else if (input.tapped('KeyP', 'Enter', 'Escape')) {
+      // Esc resumes, exactly like P / Enter (round #23). Opening the
+      // pause stays P-only — Escape in play does nothing.
       disarmReset();
       g.state = 'play';
     }
@@ -1415,6 +1480,8 @@ function frame(now) {
   syncResetBtn();
   syncHowtoBtn();
   syncHowto();
+  syncCustomizeBtn();
+  syncCustomize();
   syncLangToggle();
   if (touchUI) touchUI.update();
   // Off-screen traffic warnings for the HUD (on foot only; the shot

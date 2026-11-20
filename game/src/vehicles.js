@@ -1218,7 +1218,11 @@ export function applyCarSpec(car, spec) {
   car.armor = spec.armor;
   car.paint = spec.paint;
   recolorCar(car, spec.paint);
-  if (spec.neon !== null && spec.neon !== undefined) setCarNeon(car, spec.neon);
+  if (spec.neon !== null && spec.neon !== undefined && spec.glow !== false) {
+    setCarNeon(car, spec.neon);
+  } else {
+    setCarNeon(car, -1); // no neon installed, or switched off at the panel
+  }
 }
 
 /** Paint the body: an owned car keeps its colour across a respawn. */

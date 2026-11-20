@@ -4,9 +4,18 @@
 // that refuses storage just loses the feature, never the game.
 import { DAY_START, SAVE_KEY } from './config.js';
 
-/** A wardrobe with nothing bought and the first colour. */
+/**
+ * A wardrobe with nothing bought and the first colour. The first four
+ * fields are what is WORN right now (the figure's setFit reads them);
+ * `own` is what has been BOUGHT (round #23): buying is once-only, and
+ * wearing / taking off an owned piece is free everywhere — at the Surf
+ * Shack and in the pause screen's CUSTOMIZE panel alike.
+ */
 export function freshFit() {
-  return { scarf: false, hat: false, shades: false, color: 0 };
+  return {
+    scarf: false, hat: false, shades: false, color: 0,
+    own: { scarf: false, hat: false, shades: false },
+  };
 }
 
 /** Ammo Hut gear with nothing bought. */
@@ -39,12 +48,29 @@ const int = (v, fallback, min, max) => (
 /** One owned car, clamped to the grades and upgrade levels that exist. */
 function cleanCar(c) {
   if (!c || typeof c !== 'object') return null;
+  const paint = int(c.paint, 0, 0, 9);
+  // Paint ownership (round #23): the set of colours this car has ever
+  // been painted in. A colour is bought once ($60 at the Motors desk)
+  // and switching back to it is free. Saves from before the set existed
+  // start with just the car's current colour in the set.
+  const paints = [];
+  if (Array.isArray(c.paints)) {
+    for (const p of c.paints) {
+      const v = int(p, -1, 0, 9);
+      if (v >= 0 && !paints.includes(v)) paints.push(v);
+    }
+  }
+  if (!paints.includes(paint)) paints.push(paint);
   return {
     grade: int(c.grade, 0, 0, 2),
-    paint: int(c.paint, 0, 0, 9),
+    paint,
+    paints,
     engine: int(c.engine, 0, 0, 2),
     armor: int(c.armor, 0, 0, 2),
     neon: c.neon === null || c.neon === undefined ? null : int(c.neon, null, 0, 4),
+    // Underglow on/off (round #23): the neon colour stays installed;
+    // this is only the switch the pause panel flips. Absent = on.
+    glow: c.glow !== false,
     stolen: c.stolen === true,
     stolenX: Number.isFinite(c.stolenX) ? c.stolenX : null,
     stolenY: Number.isFinite(c.stolenY) ? c.stolenY : null,
@@ -83,6 +109,15 @@ export function loadSave() {
         hat: fit?.hat === true,
         shades: fit?.shades === true,
         color: fit ? int(fit.color, 0, 0, 4) : 0,
+        // Ownership (round #23). Old saves have no `own`: whatever was
+        // worn at the time counts as owned (a piece that had been bought
+        // and taken off in an old save comes back as unowned — the worn
+        // state was the only record those saves kept).
+        own: {
+          scarf: fit?.own?.scarf === true || (fit?.own === undefined && fit?.scarf === true),
+          hat: fit?.own?.hat === true || (fit?.own === undefined && fit?.hat === true),
+          shades: fit?.own?.shades === true || (fit?.own === undefined && fit?.shades === true),
+        },
       },
       owned: Array.isArray(data.owned) ? data.owned.map(cleanCar).filter(Boolean) : [],
     };

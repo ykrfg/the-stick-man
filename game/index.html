@@ -54,6 +54,15 @@
     padding: 9px 18px; border-radius: 999px; border: 2px solid rgba(255,255,255,0.55);
     background: rgba(10,14,24,0.55); color: #ffd94d; font: 800 13px system-ui, sans-serif;
     white-space: nowrap; cursor: pointer; touch-action: none; -webkit-user-select: none; user-select: none; }
+  /* CUSTOMIZE (pause only; main.js owns visibility and label): re-dress
+     in owned clothes and repaint in owned colours. Bottom-center is
+     clear of the reset button (bottom-left), the touch cluster
+     (bottom-right) and the centred pause text. */
+  #btnCustomize { position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(14px + env(safe-area-inset-bottom)); z-index: 9; display: none;
+    padding: 9px 18px; border-radius: 999px; border: 2px solid rgba(255,255,255,0.55);
+    background: rgba(10,14,24,0.55); color: #ffd94d; font: 800 13px system-ui, sans-serif;
+    white-space: nowrap; cursor: pointer; touch-action: none; -webkit-user-select: none; user-select: none; }
   /* Progress reset (title / pause, both platforms): main.js owns its
      visibility and label — hidden unless a save exists. Two-step: the first
      press arms it (red), the second wipes. Bottom-left is clear of the
@@ -95,6 +104,7 @@
   <button id="tapBtn" type="button">TAP TO START</button>
 </div>
 <button id="btnHowto" type="button">HOW TO PLAY</button>
+<button id="btnCustomize" type="button">CUSTOMIZE</button>
 <button id="btnReset" type="button">RESET PROGRESS</button>
 <div id="langToggle" role="group" aria-label="Language / 言語">
   <button id="langJa" type="button">JP</button>

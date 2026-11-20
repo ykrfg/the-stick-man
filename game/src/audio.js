@@ -297,7 +297,16 @@ export class SoundFX {
       const { osc, gain } = this.engineNodes;
       if (on) {
         osc.frequency.value = 50 + speedRatio * 130;
-        gain.gain.value = this.muted ? 0 : 0.05 + speedRatio * 0.05;
+        // Level (round #23): the hum used to top out at 0.10 into the
+        // 0.5 master — fine when it was the only sound in the game, but
+        // once real BGM arrived (round #20, elements playing at up to
+        // 0.7 direct) a 50-180 Hz lowpassed hum at 0.025-0.05 at the
+        // destination was masked to inaudibility. The wiring was never
+        // broken (nodes alive, frequency tracking speed); the voice is
+        // now ~3x louder, still a low background note under the music,
+        // still routed through seMaster so the SE slider and the mute
+        // keep their authority over it.
+        gain.gain.value = this.muted ? 0 : 0.16 + speedRatio * 0.14;
       } else {
         gain.gain.value = 0;
       }

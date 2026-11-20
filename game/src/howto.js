@@ -26,7 +26,7 @@ const SECTIONS = [
   ]],
   ['howto.money.h', [
     'howto.money.0', 'howto.money.1', 'howto.money.2',
-    'howto.money.3', 'howto.money.4', 'howto.money.5',
+    'howto.money.3', 'howto.money.4', 'howto.money.5', 'howto.money.6',
   ]],
   ['howto.day.h', ['howto.day.0', 'howto.day.1']],
   ['howto.sound.h', ['howto.sound.0', 'howto.sound.1']],

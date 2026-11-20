@@ -182,6 +182,14 @@ export const TREAT_PRICE = 40;
 export const ROBBERY_TIME = 2.5;
 export const ROBBERY_HEAT = 100;
 export const ROBBERY_COOLDOWN = 240;
+/**
+ * How close to a shop's door point the player must be to start a hold-up
+ * — and to keep standing in one. Round #23: this used to be a 62-unit
+ * doorstep spot for starting (with an 84-unit leash once under way),
+ * which read as pixel-hunting; the zone is now the shop's whole
+ * frontage, one radius for both starting and standing.
+ */
+export const ROBBERY_RADIUS = 100;
 
 /**
  * Story missions 4–6 tuning. The COURIER HIT car shrugs off glancing

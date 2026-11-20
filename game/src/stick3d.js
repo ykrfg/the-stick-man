@@ -174,7 +174,14 @@ export function createFigure(opts = {}) {
   shadow.position.y = 0.62;
   group.add(shadow);
 
-  const HIP_H = 16;
+  // Root height (round #23): the straight leg's chain is hip pivot -0.5,
+  // thigh 8, shin 8, and the foot's sole sits 0.95 below the ankle (centre
+  // -0.35, half-thickness 0.6) — 17.45 in all. The root used to sit at
+  // 16, which left every figure standing with its feet 1.45 units
+  // through the floor (measured: idle lowest point -1.69 with the
+  // breathing dip). Segment lengths are unchanged; the root was simply
+  // placed too low for the legs under it.
+  const HIP_H = 17.45;
   const pelvis = new THREE.Group();
   pelvis.position.y = HIP_H;
   tilt.add(pelvis);
@@ -445,8 +452,11 @@ export function createFigure(opts = {}) {
     // carrying the weight. Without the sway the walk is a scissor; with
     // it, the mass moves across the feet. ---
     const bob = Math.abs(Math.sin(ph)) * (1.15 + 0.55 * run) * gait;
-    const breathe = Math.sin(time * 1.7 + fig.swaySeed) * 0.24 * (1 - gait);
-    pelvis.position.y = HIP_H + bob + breathe - c.crouch * 6.5 - c.drive * 14;
+    // Breathing lifts only (round #23): a symmetric +-0.24 bob dipped
+    // the planted feet under the floor on every exhale now that the
+    // root height is exact.
+    const breathe = (0.5 + 0.5 * Math.sin(time * 1.7 + fig.swaySeed)) * 0.24 * (1 - gait);
+    pelvis.position.y = HIP_H + bob + breathe - c.crouch * 6.5 - c.drive * 14 + (fig._lift || 0);
     pelvis.position.x = 0; // the punch block below may drive these forward/sideways
     pelvis.position.z = -Math.sin(ph) * 0.9 * gait * (1 - c.drive);
     pelvis.rotation.x = Math.sin(ph * 2 + fig.swaySeed) * 0.035 * gait + c.bank * 0.12; // roll
@@ -461,8 +471,12 @@ export function createFigure(opts = {}) {
     legR.hip.rotation.z = sw2 * amp + c.crouch * 0.55 + c.drive * 1.25 - c.down * 0.1;
     legL.knee.rotation.z = -kneeLift(ph) - 0.06 * gait - c.crouch * 1.75 - c.drive * 1.55;
     legR.knee.rotation.z = -kneeLift(ph + Math.PI) - 0.06 * gait - c.crouch * 1.75 - c.drive * 1.55;
-    legL.ankle.rotation.z = Math.sin(ph) * 0.32 * gait + c.crouch * 0.5 + c.drive * 0.45 + c.down * 0.12;
-    legR.ankle.rotation.z = Math.sin(ph + Math.PI) * 0.32 * gait + c.crouch * 0.5 + c.drive * 0.45 - c.down * 0.08;
+    // The crouch ankle term used to be 0.5, which pitched the crouched
+    // foot toe-down around the ankle and speared the toe ~2.3 units
+    // through the floor (measured crouch lowest point -3.89 before the
+    // root fix). 0.15 keeps a hint of the roll without the spear.
+    legL.ankle.rotation.z = Math.sin(ph) * 0.32 * gait + c.crouch * 0.15 + c.drive * 0.45 + c.down * 0.12;
+    legR.ankle.rotation.z = Math.sin(ph + Math.PI) * 0.32 * gait + c.crouch * 0.15 + c.drive * 0.45 - c.down * 0.08;
 
     // --- Spine: a slight forward curve into the run, a counter-twist
     // against the pelvis, and a side sway that trails the step. ---
@@ -544,10 +558,28 @@ export function createFigure(opts = {}) {
         const rear = arm === 'R' ? legR : legL;
         lead.hip.rotation.z += 0.62 * strike + 0.1 * load; // step in and plant
         lead.knee.rotation.z -= 0.5 * load + 0.18 * strike;
-        lead.ankle.rotation.z += 0.25 * strike;
+        // During the load the lead knee bends -0.5 with no ankle
+        // compensation, pitching the planted foot toe-down ~0.4 rad
+        // (measured windup lowest point -1.71 after the root fix);
+        // +0.4 of ankle keeps the loaded foot flat.
+        lead.ankle.rotation.z += 0.25 * strike + 0.4 * load;
         rear.hip.rotation.z -= 0.3 * strike;
-        rear.knee.rotation.z += 0.08 * strike;
-        rear.ankle.rotation.z -= 0.45 * strike; // rear heel up, toe planted
+        // Rear heel up, toe planted. The old pose (-0.45 ankle around
+        // the joint, straight knee) speared the toe ~2 units through
+        // the floor at the strike: the body dips 2.2 into the punch
+        // while the rear leg stays ramrod straight, so its reach
+        // exceeds the drop. A real drive leg folds: the knee bends
+        // back (-0.55 strike / -0.3 load) to shorten the leg by the
+        // dip, and the ankle term (+0.5) leaves the FOOT's total pitch
+        // at -0.35 — heel up, toe on the ground it drives from.
+        // (Measured: strike lowest point -5.3 originally, -2.31 with
+        // root fix alone, ~-0.3 with this fold.)
+        // Same fold during the load (weight winding back onto the rear
+        // leg): knee -0.5 with the ankle compensating +0.5, so the rear
+        // foot stays flat instead of pitching toe-down (windup lowest
+        // point was -1.7 with a -0.3 uncompensated fold).
+        rear.knee.rotation.z -= 0.55 * strike + 0.5 * load;
+        rear.ankle.rotation.z += 0.5 * strike + 0.5 * load;
         neck.rotation.y -= side * 0.1 * strike; // eyes stay on the target
       }
     }
@@ -570,10 +602,42 @@ export function createFigure(opts = {}) {
     // while moving (the bank the player feels when changing direction). ---
     tilt.rotation.x = c.bank * 0.28 - 1.5 * easeOut(Math.min(1, c.down));
     // Seated drivers sink at the root, and the seat pose sinks a little
-    // further than before, so the head stays inside the cabin.
-    tilt.position.y = -2 * c.down - 5.2 * c.drive - rootDip;
+    // further than before, so the head stays inside the cabin. The
+    // drive term grew by the round #23 root raise (5.2 -> 6.65) so the
+    // seated figure's world height is exactly what it was.
+    tilt.position.y = -2 * c.down - 6.65 * c.drive - rootDip;
     tilt.position.x = rootX;
     shadow.material.opacity = 0.2 * (1 - c.drive);
+
+    // --- Ground contact (round #23): the gait's ankle roll can still
+    // pitch a stance toe a few tenths under the floor at heel strike /
+    // toe-off (it pivots on the ankle, not on the contact point). Read
+    // this frame's solved feet from last render's world matrices and
+    // store the lift the NEXT frame's pelvis applies — a one-frame lag
+    // at a fast damp, invisible in play, and it converges long before
+    // a ?shot= still is taken. Scoped to on-foot, non-punch poses: the
+    // punch plants are joint-solved above, and a seated or knocked-down
+    // figure's feet are not ground contacts at all. ---
+    if (c.down < 0.3 && c.drive < 0.3 && fig.punchT < 0) {
+      let lowest = Infinity;
+      for (const leg of [legL, legR]) {
+        const foot = leg.ankle.children[0];
+        const e = foot.matrixWorld.elements;
+        const p = foot.geometry.parameters;
+        for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+          const wy = e[1] * (sx * p.width / 2) + e[5] * (sy * p.height / 2)
+            + e[9] * (sz * p.depth / 2) + e[13];
+          if (wy < lowest) lowest = wy;
+        }
+      }
+      // The measured pose already includes the lift currently applied,
+      // so the un-lifted penetration is (lift - lowest): targeting that
+      // makes the fixed point a sole resting exactly on 0, not halfway.
+      const want = lowest === Infinity ? 0 : Math.max(0, (fig._lift || 0) - lowest);
+      fig._lift = damp(fig._lift || 0, want, 16, dt);
+    } else {
+      fig._lift = damp(fig._lift || 0, 0, 10, dt);
+    }
   }
 
   return fig;
