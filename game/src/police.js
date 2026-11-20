@@ -133,6 +133,10 @@ function chaseOnFoot(g, car, dt) {
       car.officerSpawned = true;
       const officer = spawnPed(g, { role: 'cop', x: car.x + 20, y: car.y + 10 });
       officer.state = 'fight';
+      // The stand-down walk (people.js 'leave') goes back to this car,
+      // and this car holds at the kerb for him once the heat dies.
+      officer.ride = car;
+      car.officer = officer;
       g.events.push({ type: 'officer' });
     }
   }
@@ -241,12 +245,28 @@ export function updatePolice(g, dt, time) {
         // heat clears. (Player-owned wrecks never reach this filter.)
         continue;
       }
-      // The heat is gone: drive off and despawn in the distance.
-      car.speed = Math.min(CAR.trafficSpeed, car.speed + 200 * dt);
-      car.x += Math.cos(car.angle) * car.speed * dt;
-      car.y += Math.sin(car.angle) * car.speed * dt;
-      syncCarMesh(car, dt);
-      if (Math.hypot(car.x - p.x, car.y - p.y) > 780) removeCar(g, car);
+      // A car whose officer is walking back to it holds at the kerb
+      // until he climbs in: driving off without him would strand a
+      // stood-down officer in the street. (removePed clears
+      // car.officer the moment he boards or otherwise leaves the
+      // world, and the 'leave' state's own time cap bounds the wait,
+      // so this hold always ends.) A knocked-down officer who will
+      // get back up is waited for too; a dead one is not.
+      const off = car.officer;
+      const officerReturning = !!off && g.peds.includes(off)
+        && (off.state === 'leave' || (off.state === 'down' && off.hp > 0));
+      if (officerReturning) {
+        const step = 500 * dt;
+        car.speed = Math.abs(car.speed) <= step ? 0 : car.speed - Math.sign(car.speed) * step;
+        moveFreeCar(g, car, dt);
+      } else {
+        // The heat is gone: drive off and despawn in the distance.
+        car.speed = Math.min(CAR.trafficSpeed, car.speed + 200 * dt);
+        car.x += Math.cos(car.angle) * car.speed * dt;
+        car.y += Math.sin(car.angle) * car.speed * dt;
+        syncCarMesh(car, dt);
+        if (Math.hypot(car.x - p.x, car.y - p.y) > 780) removeCar(g, car);
+      }
     } else {
       chasePlayer(g, car, dt);
     }

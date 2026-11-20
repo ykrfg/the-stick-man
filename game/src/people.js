@@ -76,6 +76,13 @@ export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex
     dodgeX: 0,
     dodgeY: 0,
     punchCd: rng.range(0.2, 0.7),
+    // The cruiser that put this officer out (police.js sets it at
+    // deployment; null for everyone else). The stand-down walk in the
+    // 'leave' state goes back to it. leaveT is that state's clock:
+    // a hard cap so no officer can ever be left standing in a state
+    // with no live behaviour.
+    ride: null,
+    leaveT: 0,
     // Elite-fighter overrides (mission escorts and raid crews): a faster
     // chase and a faster punch than the rank and file, when the spawn
     // asks for them. Null keeps the role defaults in the fight case.
@@ -126,6 +133,13 @@ export function spawnPeds(g, count = 15) {
 
 /** Remove a person from the world (despawned, or a passenger who climbed in). */
 export function removePed(g, ped) {
+  // A departing officer frees his cruiser: with nobody left to pick
+  // up, the car stops holding at the kerb and drives off like any
+  // unit whose heat died (police.js reads car.officer).
+  if (ped.ride && ped.ride.officer === ped) {
+    ped.ride.officer = null;
+    ped.ride.officerSpawned = false;
+  }
   g.scene.remove(ped.fig.group);
   const i = g.peds.indexOf(ped);
   if (i >= 0) g.peds.splice(i, 1);
@@ -537,13 +551,22 @@ export function updatePeds(g, dt, time) {
         // Hostiles chase the player; on foot they punch him, in a car they beat the car.
         const target = p.state === 'car' && p.car ? p.car : p;
         const d = Math.hypot(target.x - ped.x, target.y - ped.y);
-        // Officers stand down once the heat is gone: they stop, then wander off.
+        // Officers stand down once the heat is gone. A far officer is
+        // already out of the story — the cooling clear can only happen
+        // with every unit >430 away — and simply leaves the world. A
+        // NEAR officer walks back to his cruiser in the 'leave' state:
+        // the instant clears (Spray 'n Go paint, the fixer) can zero
+        // the heat with him at the player's elbow. (He used to be
+        // switched to 'idle' here — Bruno's stand-at-post state, which
+        // nothing ever leaves or despawns — so he froze upright
+        // forever while his car drove off without him.)
         if (ped.role === 'cop' && g.stars === 0) {
           if (d > 150) {
             removePed(g, ped);
             continue;
           }
-          ped.state = 'idle';
+          ped.state = 'leave';
+          ped.leaveT = 0;
           break;
         }
         if (d > (p.state === 'car' ? 40 : 30)) {
@@ -560,6 +583,43 @@ export function updatePeds(g, dt, time) {
         }
         // Cops give up the foot chase when the player is long gone.
         if (ped.role === 'cop' && d > 620) {
+          removePed(g, ped);
+          continue;
+        }
+        break;
+      }
+      case 'leave': {
+        // A stood-down officer walks back to the cruiser that deployed
+        // him and climbs in; the car holds at the kerb for him
+        // (police.js) and drives off once he is aboard. If the heat
+        // comes back he is a pursuer again. If the cruiser is gone —
+        // wrecked, taken, or already driven off — he walks away from
+        // the player and leaves the world at the usual give-up
+        // distance. A hard time cap backstops both routes: this state
+        // always ends with the officer back in a car or out of the
+        // world, never standing frozen.
+        if (g.stars > 0) {
+          ped.state = 'fight';
+          break;
+        }
+        ped.leaveT += dt;
+        const car = ped.ride;
+        const rideOk = !!car && g.cars.includes(car) && car.kind === 'police'
+          && !car.wrecked && car.occupant !== 'player';
+        if (rideOk && Math.hypot(car.x - ped.x, car.y - ped.y) <= 700) {
+          const d = moveToward(g, ped, car.x, car.y, dt, 172);
+          if (d <= 38) {
+            removePed(g, ped); // climbed in; removePed frees the car
+            continue;
+          }
+        } else {
+          moveToward(g, ped, ped.x * 2 - p.x, ped.y * 2 - p.y, dt, 150);
+          if (Math.hypot(p.x - ped.x, p.y - ped.y) > 560) {
+            removePed(g, ped);
+            continue;
+          }
+        }
+        if (ped.leaveT > 15) {
           removePed(g, ped);
           continue;
         }
