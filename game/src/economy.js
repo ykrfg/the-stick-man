@@ -9,7 +9,7 @@
 // get it back by walking to the pin, or pay the Motors desk to fetch it.
 import * as THREE from 'three';
 import {
-  FIXER, GEAR, MOTORS, NEON, OUTFIT, PLAYER, SAFEHOUSE, THEFT,
+  FIXER, GEAR, MEAL_PRICE, MOTORS, NEON, OUTFIT, PLAYER, SAFEHOUSE, THEFT,
 } from './config.js';
 import { t } from './i18n.js';
 import { jobAvailable, missionAvailable } from './missions.js';
@@ -529,7 +529,11 @@ export function fixerPrompt(game) {
   if (!atBooth && !atDiner) return null;
   if (atDiner && game.bruno && near(game.player, game.bruno, 50)
     && (missionAvailable(game) || jobAvailable(game))) return null;
-  if (atDiner && game.player.hp < game.player.maxHp) return null;
+  // The meal yield applies only when the meal can actually be bought
+  // (round #22 affordability gate, as in main.js): a hurt player who
+  // cannot pay is not sent to a meal prompt that would eat his press —
+  // the fixer is then judged on its own terms.
+  if (atDiner && game.player.hp < game.player.maxHp && game.money >= MEAL_PRICE) return null;
   return t('prompt.fixer', { cost: cash(game.stars * FIXER.perStar) });
 }
 

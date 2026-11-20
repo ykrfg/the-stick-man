@@ -151,6 +151,7 @@ const STRINGS = {
     // Prompts & services (main.js)
     'prompt.exitCar': 'E — Exit car',
     'prompt.stealCar': 'E — Steal car',
+    'prompt.ownCar': 'E — Your car',
     'prompt.talk': 'E — Talk to Bruno',
     'prompt.meal': "E — Eat at Bruno's ({price}) — restores health",
     'prompt.treat': 'E — Get treated at St. Palm ({price}) — restores health',
@@ -485,6 +486,7 @@ const STRINGS = {
     // Prompts & services (main.js)
     'prompt.exitCar': 'E — 車を降りる',
     'prompt.stealCar': 'E — 車を盗む',
+    'prompt.ownCar': 'E — 自分の車',
     'prompt.talk': 'E — ブルーノと話す',
     'prompt.meal': "E — Bruno'sで食事（{price}）— 体力回復",
     'prompt.treat': 'E — St. Palmで治療（{price}）— 体力回復',
