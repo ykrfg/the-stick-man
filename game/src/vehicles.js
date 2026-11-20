@@ -4,7 +4,7 @@
 // network lane by lane, the player's arcade driving, and the shared collision
 // resolution (buildings, other cars, pedestrians) that police cars reuse.
 import * as THREE from 'three';
-import { CAR, COURIER_HP, CRASH_DAMAGE, CRASH_GRACE, MOTORS, NEON, PLAYER, ROAD, TRAFFIC_WARN, TRAFFIC_YIELD, WORLD, WRECK_BURN } from './config.js';
+import { CAR, COURIER_HP, CRASH_DAMAGE, CRASH_GRACE, DRIVEN_CRASH_TAKEN, MOTORS, NEON, PLAYER, ROAD, TRAFFIC_WARN, TRAFFIC_YIELD, WORLD, WRECK_BURN } from './config.js';
 import { clampToWorld, resolveCircleCollision } from './city.js';
 import { basicMat, toonMat } from './stick3d.js';
 import { makeGlowSprite, nightLevel } from './gfx.js';
@@ -556,7 +556,11 @@ export function crashDamageCar(g, car, amount) {
   if (car.wrecked || !(amount > 0)) return;
   if (g.time < (car.crashGraceUntil ?? 0)) return;
   car.crashGraceUntil = g.time + CRASH_GRACE;
-  damageCar(g, car, amount);
+  // The driven car shrugs off a third of every crash (see
+  // DRIVEN_CRASH_TAKEN in config.js): the check is this car's own
+  // occupant, so the other car's call in the same impact bills it
+  // full price, and the discount ends when the player steps out.
+  damageCar(g, car, car.occupant === 'player' ? amount * DRIVEN_CRASH_TAKEN : amount);
 }
 
 /**

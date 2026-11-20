@@ -90,6 +90,24 @@ export const CAR = {
 export const CRASH_DAMAGE = { mover: 21, struck: 34, wall: 40 };
 
 /**
+ * The car the player is currently DRIVING takes crash damage at this
+ * rate (round #22, the user's call: "the car I'm driving should be
+ * tougher"). 2/3 ≈ surviving half again as many solid hits — measured
+ * on the standard 100 HP car, fresh-encounter hits to wreck: mover
+ * at full speed 6 -> 9, mover at half speed 11 -> 16, wall at full
+ * speed 3 -> 4, struck by a full-speed ram 3 -> 5. It applies inside
+ * crashDamageCar keyed on the car's own occupant, so it covers only
+ * damage TAKEN (mover share, struck share, wall share) while driven;
+ * the damage a driven car DEALS is billed by the other car's own
+ * call at full price, every undriven car (traffic, parked, police,
+ * the courier, the repo car on the lot) keeps CRASH_DAMAGE exactly,
+ * and the discount lapses the moment the player steps out. Armour
+ * mods (+30/+60/+100 max HP) are a separate, persistent bonus and
+ * are untouched.
+ */
+export const DRIVEN_CRASH_TAKEN = 2 / 3;
+
+/**
  * Crash-damage grace window, in seconds of game time: after a car takes
  * a crash hit (car-to-car or wall) it takes no further CRASH damage
  * until the window lapses. A pile-up or a wall grind is one accident
