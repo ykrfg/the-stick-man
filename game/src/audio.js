@@ -53,23 +53,34 @@ export class SoundFX {
   }
 
   /**
-   * Fetch and decode the recorded effects once, in the background. A file
-   * that is absent or undecodable simply never lands in its pool, and the
-   * synth voice covers it — the manifest is an upgrade, never a dependency.
+   * Fetch and decode the recorded effects in the background, ONE file at
+   * a time: a burst of seventeen decodes the moment the game unlocks
+   * would stall the first frames of play on a slow machine, and the
+   * synth voices cover the gap by design. A file that is absent or
+   * undecodable simply never lands in its pool — the manifest is an
+   * upgrade, never a dependency.
    */
   loadFiles() {
     if (this.filesStarted || !this.ctx) return;
     this.filesStarted = true;
+    const jobs = [];
     for (const [pool, files] of Object.entries(SE_FILES)) {
       this.fileBuffers[pool] = [];
-      for (const url of files) {
-        fetch(url)
-          .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(url))))
-          .then((buf) => this.ctx.decodeAudioData(buf))
-          .then((decoded) => { this.fileBuffers[pool].push(decoded); })
-          .catch(() => { /* synth fallback covers this file */ });
-      }
+      for (const url of files) jobs.push([pool, url]);
     }
+    let i = 0;
+    const step = () => {
+      if (i >= jobs.length) return;
+      const [pool, url] = jobs[i];
+      i += 1;
+      fetch(url)
+        .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(url))))
+        .then((buf) => this.ctx.decodeAudioData(buf))
+        .then((decoded) => { this.fileBuffers[pool].push(decoded); })
+        .catch(() => { /* synth fallback covers this file */ })
+        .finally(() => setTimeout(step, 60));
+    };
+    step();
   }
 
   /**
