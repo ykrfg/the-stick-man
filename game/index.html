@@ -47,6 +47,13 @@
   #tapBtn { position: fixed; left: 50%; bottom: calc(6% + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 7;
     padding: 17px 36px; border-radius: 999px; border: 3px solid #17181c;
     background: #ffd94d; color: #17181c; font: 800 23px system-ui, sans-serif; white-space: nowrap; }
+  /* HOW TO PLAY (title / pause; main.js owns visibility and label).
+     Top-right, above the volume panel, clear of the centred language
+     toggle; the sheet itself is howto.js's DOM. */
+  #btnHowto { position: fixed; right: 14px; top: calc(10px + env(safe-area-inset-top)); z-index: 9; display: none;
+    padding: 9px 18px; border-radius: 999px; border: 2px solid rgba(255,255,255,0.55);
+    background: rgba(10,14,24,0.55); color: #ffd94d; font: 800 13px system-ui, sans-serif;
+    white-space: nowrap; cursor: pointer; touch-action: none; -webkit-user-select: none; user-select: none; }
   /* Progress reset (title / pause, both platforms): main.js owns its
      visibility and label — hidden unless a save exists. Two-step: the first
      press arms it (red), the second wipes. Bottom-left is clear of the
@@ -87,6 +94,7 @@
   <button id="btnPause" type="button">| |</button>
   <button id="tapBtn" type="button">TAP TO START</button>
 </div>
+<button id="btnHowto" type="button">HOW TO PLAY</button>
 <button id="btnReset" type="button">RESET PROGRESS</button>
 <div id="langToggle" role="group" aria-label="Language / 言語">
   <button id="langJa" type="button">JP</button>

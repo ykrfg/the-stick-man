@@ -29,6 +29,7 @@ import { detectMobile, initTouch } from './touch.js';
 import { getLang, initLang, setLang, t } from './i18n.js';
 import { bindRenderer, initGfx, setQuality, update as updateGfx } from './gfx.js';
 import { initAudio, updateAudio } from './audio-director.js';
+import { closeHowto, howtoOpen, initHowto, openHowto, syncHowto } from './howto.js';
 import {
   callCar, economyBusy, economyInteract, fixerPrompt, initEconomy, resetEconomy, shopPrompt,
   spawnOwnedCars, updateEconomy,
@@ -213,6 +214,7 @@ bindRenderer(renderer);
 initEconomy(g);
 if (!shotName) spawnOwnedCars(g);
 if (!shotName) initAudio(g);
+if (!shotName) initHowto();
 if (shotName) setQuality(2);
 
 if (shotName) setupShot(g, shotName);
@@ -331,6 +333,31 @@ function syncResetBtn() {
   resetBtn.style.display = show ? 'block' : 'none';
   resetBtn.textContent = g.resetArm.armed ? t('btn.resetArmed') : t('btn.reset');
   resetBtn.classList.toggle('armed', g.resetArm.armed);
+}
+
+// --- HOW TO PLAY entry (title / pause screens, desktop and touch) ---
+// Opens howto.js's full-screen sheet. It covers the chrome while open
+// (its own z-index sits above every button), so the sync below only
+// has to hide this entry behind it.
+const howtoBtn = document.getElementById('btnHowto');
+function pokeHowto() {
+  howtoBtn.blur(); // Enter must never re-click it (see pokeReset)
+  if (g.state === 'title' || g.state === 'paused') openHowto();
+}
+howtoBtn.addEventListener('click', pokeHowto);
+howtoBtn.addEventListener('touchstart', (event) => {
+  event.preventDefault();
+  pokeHowto();
+}, { passive: false });
+
+let lastHowtoBtnKey = '';
+function syncHowtoBtn() {
+  const show = !shotName && (g.state === 'title' || g.state === 'paused') && !howtoOpen();
+  const key = `${show}|${g.lang}`;
+  if (key === lastHowtoBtnKey) return;
+  lastHowtoBtnKey = key;
+  howtoBtn.style.display = show ? 'block' : 'none';
+  howtoBtn.textContent = t('btn.howto');
 }
 
 function resize() {
@@ -1195,7 +1222,13 @@ function frame(now) {
     return;
   }
 
-  if (g.state === 'title') {
+  if (howtoOpen()) {
+    // The HOW TO PLAY sheet owns the keys while it is up: a close key
+    // shuts it, and nothing leaks into the title's start, the pause's
+    // resume or a reset underneath. The world keeps rendering behind
+    // the sheet (it is a DOM cover), frozen in its current state.
+    if (input.tapped('Escape', 'Enter', 'KeyP')) closeHowto();
+  } else if (g.state === 'title') {
     if (input.tapped('KeyR')) {
       pokeReset();
     } else if (g.resetArm.armed && (input.pressed.size > 0 || input.mouse.clicked)) {
@@ -1363,6 +1396,8 @@ function frame(now) {
   if (!shotName) updateAudio(g, dt);
   updateCamera(dt);
   syncResetBtn();
+  syncHowtoBtn();
+  syncHowto();
   syncLangToggle();
   if (touchUI) touchUI.update();
   // Off-screen traffic warnings for the HUD (on foot only; the shot

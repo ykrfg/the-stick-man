@@ -20,6 +20,7 @@ Controls: WASD or arrow keys to move, Shift to sprint, E to enter/exit a car and
 - **Seven ways to spend money.** PALMERA MOTORS sells three grades of car and tunes paint, engine, armour and neon; the Surf Shack sells a hat, shades and a scarf; the Ammo Hut sells the pistol, body armour, fight gloves and running shoes; there is a safehouse to buy (it becomes your respawn point and a free bed), a fixer who erases wanted stars for cash, and a phone call that brings your car to the kerb.
 - **Cars that stay yours.** A bought car never despawns and never adds steal heat. Left alone far from you for a while it gets stolen, and its last parking spot becomes a map pin: walk back to it, or pay the Motors desk to fetch it.
 - **Everything is tappable.** The shop trays are plain DOM rows, so a phone tap, a mouse click and the number keys all buy the same thing. Volume sliders for music and effects sit on the title and pause screens and persist on their own key.
+- **A HOW TO PLAY page.** The title and pause screens carry a HOW TO PLAY entry that opens a full scrollable page on the game's systems — the story, every key and touch button, cars, the wanted system, money, the day cycle and sound — in English or Japanese, following the language toggle.
 
 `C` キー（スマホは CALL ボタン）で自分の車を路肩へ呼び出せます。
 
@@ -29,6 +30,7 @@ Controls: WASD or arrow keys to move, Shift to sprint, E to enter/exit a car and
 - **7つのお金の使い道。** パルメラモータースで車を買い、塗装・エンジン・装甲・ネオンを弄る。サーフシャックで帽子・サングラス・スカーフ。アモハットでピストル・防弾ベスト・グローブ・シューズ。セーフハウス（買うと死亡時の復帰地点と無料のベッドになる）、手配を消すフィクサー、車を呼ぶ電話。
 - **買った車はあなたのもの。** 購入した車は消えず、盗難の手配も増えません。ただし長時間放っておくと盗まれ、最後に停めた場所が地図にピンで残ります。歩いて取り戻すか、モータースで有料で回収を。
 - **すべてタップで操作。** 店のメニューは DOM の行なので、スマホのタップ・マウスのクリック・数字キーが同じように働きます。音楽と効果音の音量スライダーはタイトルとポーズ画面にあり、専用キーで保存されます。
+- **「あそびかた」ページ。** タイトルとポーズ画面の「あそびかた」から、物語・キーとタッチの全操作・車・手配・お金・昼夜・サウンドをまとめたスクロールできる専用ページが開きます。言語切り替えに追従します。
 
 
 ## Run it
