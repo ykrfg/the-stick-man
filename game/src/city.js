@@ -4,6 +4,7 @@
 // blocks filled with flat-coloured buildings. This module owns the map data and the
 // collision helpers every moving thing uses; it draws nothing itself.
 import { COLORS, MOTORS, ROAD, WORLD } from './config.js';
+import { makeRng } from './random.js';
 
 /** Y coordinate where the beach sand starts; south of the last street. */
 export const BEACH_Y = 2240;
@@ -123,14 +124,20 @@ export function buildCity(rng) {
   city.landmarks.pier = { x: pier.x + 195, y: pier.y + 335 };
 
   // PALMERA MOTORS: a glassy showroom with three marked bays out front.
+  // The two buildings added by the economy build draw from their OWN
+  // seeded stream, never the city's: every draw they took from the main
+  // stream would reshuffle all the filler blocks placed after them, and
+  // Palmera's layout for a given seed is a tested reference (the probe
+  // suite stages against it).
+  const rngNew = makeRng(20261120);
   const motors = at(0, 4);
-  city.buildings.push(building(motors.x + 45, motors.y + 45, 240, 200, rng, MOTORS.name));
+  city.buildings.push(building(motors.x + 45, motors.y + 45, 240, 200, rngNew, MOTORS.name));
   city.landmarks.motors = { x: motors.x + 165, y: motors.y + 275 };
   city.motorsLot = [60, 165, 270].map((ox) => ({ x: motors.x + ox, y: motors.y + 300 }));
 
   // The safehouse: a quiet low block west of the PD, door on the south face.
   const safe = at(0, 1);
-  city.buildings.push(building(safe.x + 45, safe.y + 35, 240, 200, rng, 'SAFEHOUSE'));
+  city.buildings.push(building(safe.x + 45, safe.y + 35, 240, 200, rngNew, 'SAFEHOUSE'));
   city.landmarks.safehouse = { x: safe.x + 165, y: safe.y + 275 };
 
   // The three shops Bruno sends you to in the rent-collection mission.
@@ -168,7 +175,13 @@ export function buildCity(rng) {
   const landmarkBlocks = new Set(['3,2', '4,1', '5,1', '1,3', '6,3', '2,4', '7,4', '1,1', '5,3', '2,0', '4,2', '0,1', '0,4']);
   for (const block of city.blocks) {
     if (block.row === 5) continue; // the beach row stays open
-    if (landmarkBlocks.has(`${block.col},${block.row}`)) continue;
+    if (landmarkBlocks.has(`${block.col},${block.row}`)) {
+      // The two blocks this build newly reserves (Motors, safehouse)
+      // still draw their filler from the stream — into a scratch city
+      // that is thrown away — so no later block's layout shifts.
+      if (block.col === 0 && (block.row === 1 || block.row === 4)) fillBlock({ buildings: [] }, block, rng);
+      continue;
+    }
     fillBlock(city, block, rng);
   }
   return city;
