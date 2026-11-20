@@ -176,15 +176,23 @@ function crateSpot(g) {
 }
 
 /**
- * A rival counts as beaten when he is down — or already gone from the
- * world. The only way a posted man leaves g.peds mid-mission is the
- * down-timer in updatePeds removing a beaten body (or the mission's own
- * cleanup, which runs after the count), so an absent rival is a beaten
- * one; counting only the state would leave a wave short a man it can
- * never produce again.
+ * A rival counts as beaten when he is actually down for good — hp at
+ * zero — or already gone from the world. 'down' ALONE is not beaten:
+ * a car knockdown (runOverPed) puts a fighter down with hp to spare
+ * and he stands back up after ~2.6 s; counting the state let a single
+ * drive through a clustered wave "win" the fight, and the phase
+ * cleanup then removed the living men (round #22 bug: the raid's
+ * elites vanished when their cars met the player's). For rivals,
+ * hp <= 0 is exactly the down that never gets up — hurtPed sets
+ * 'down' only at hp <= 0, and the knockdown keeps hp > 0. The
+ * absence clause stays (round #14): the only way a posted man leaves
+ * g.peds mid-mission is the down-timer in updatePeds sweeping a body
+ * at hp <= 0 (or the mission's own cleanup, which runs after the
+ * count), so an absent rival is a beaten one; counting only hp would
+ * leave a wave short a man it can never produce again.
  */
 function rivalBeaten(g, r) {
-  return r.state === 'down' || !g.peds.includes(r);
+  return r.hp <= 0 || !g.peds.includes(r);
 }
 
 /**
@@ -368,7 +376,7 @@ function updateJob(g) {
     } else if (j.phase === 'fight') {
       setMarker(g, g.markerRed, shop.x, shop.y);
       g.markerGold.visible = false;
-      if (j.rivals.every((r) => r.state === 'down')) {
+      if (j.rivals.every((r) => rivalBeaten(g, r))) {
         for (const rival of j.rivals) removePed(g, rival);
         j.rivals = [];
         completeJob(g, t('say.jobDone.collection', { shop: shop.name }));
@@ -715,7 +723,7 @@ export function updateMissions(g, dt, time) {
     } else if (m.phase === 'fight') {
       setMarker(g, g.markerRed, shop.x, shop.y);
       g.markerGold.visible = false;
-      if (m.rivals.every((r) => r.state === 'down')) {
+      if (m.rivals.every((r) => rivalBeaten(g, r))) {
         for (const rival of m.rivals) removePed(g, rival);
         m.rivals = [];
         g.money += 120;
@@ -745,7 +753,7 @@ export function updateMissions(g, dt, time) {
     } else if (m.phase === 'repoFight') {
       if (car) setMarker(g, g.markerRed, car.x, car.y);
       g.markerGold.visible = false;
-      if (m.rivals.every((r) => r.state === 'down')) {
+      if (m.rivals.every((r) => rivalBeaten(g, r))) {
         for (const rival of m.rivals) removePed(g, rival);
         m.rivals = [];
         m.phase = 'repoSteal';
@@ -806,7 +814,7 @@ export function updateMissions(g, dt, time) {
     } else if (m.phase === 'escortsFight') {
       if (car) setMarker(g, g.markerRed, car.x, car.y);
       g.markerGold.visible = false;
-      if (m.rivals.every((r) => r.state === 'down')) {
+      if (m.rivals.every((r) => rivalBeaten(g, r))) {
         for (const rival of m.rivals) removePed(g, rival);
         m.rivals = [];
         m.phase = 'grabCase';
