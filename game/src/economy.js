@@ -923,6 +923,7 @@ function reportStolen(car) {
   spec.stolen = true;
   spec.stolenX = car.x;
   spec.stolenY = car.y;
+  pinsDirty = true;
   car.mesh.parent?.remove(car.mesh);
   const i = g.cars.indexOf(car);
   if (i >= 0) g.cars.splice(i, 1);
@@ -945,6 +946,7 @@ function recoverStolen(paid, want = -1) {
   spec.stolen = false;
   spec.stolenX = null;
   spec.stolenY = null;
+  pinsDirty = true;
   const car = spawnCar(g, 'parked', x, y, Math.PI / 2, MOTORS.paints[spec.paint]);
   car.touched = true;
   car.slot = idx;
@@ -986,10 +988,15 @@ function recoverWrecked() {
 }
 
 /** Map pins for the stolen cars, rebuilt as the save changes. */
+let pinsDirty = true;
 function syncPins() {
-  g.stolenPins = (g.saveData.owned || [])
-    .filter((s) => s.stolen && s.stolenX !== null)
-    .map((s) => ({ x: s.stolenX, y: s.stolenY }));
+  if (!pinsDirty) return;
+  pinsDirty = false;
+  const pins = [];
+  for (const s of g.saveData.owned || []) {
+    if (s.stolen && s.stolenX !== null) pins.push({ x: s.stolenX, y: s.stolenY });
+  }
+  g.stolenPins = pins;
 }
 
 /** Bring the owned cars back into the world after a load. */
@@ -1070,7 +1077,8 @@ export function updateEconomy(game, dt) {
   g = game;
   if (!g.saveData || g.state !== 'play') return;
   updateSummon(dt);
-  for (const car of [...g.cars]) {
+  for (let ci = g.cars.length - 1; ci >= 0; ci -= 1) {
+    const car = g.cars[ci];
     if (!car.owned || car.occupant || car.wrecked || car.summon) continue;
     const d = Math.hypot(car.x - g.player.x, car.y - g.player.y);
     car.awayT = d > THEFT.range ? (car.awayT ?? 0) + dt : 0;
@@ -1129,6 +1137,7 @@ export function resetEconomy(game) {
   }
   g.lastStolenCar = null;
   g.stolenPins = [];
+  pinsDirty = true;
   g.shopOpen = null;
   if (tray) tray.classList.remove('show');
 }

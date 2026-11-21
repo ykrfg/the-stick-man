@@ -16,6 +16,11 @@ export function starsFor(heat) {
   return stars;
 }
 
+// Reused every frame: the active cruiser list. It used to be rebuilt with
+// filter() on each update, which allocated an array (and a closure) 60 times a
+// second; the list never escapes updatePolice.
+const policeCars = [];
+
 /** Was anyone in a position to see the crime at (x, y)? Cops see far, citizens less. */
 function witnessed(g, x, y) {
   for (const ped of g.peds) {
@@ -224,7 +229,10 @@ export function updatePolice(g, dt, time) {
   // driver, count toward the fleet, or drive off and despawn with the
   // player in it. (finishEnterCar converts its kind too; this filter is
   // the second lock on the same door.)
-  const policeCars = g.cars.filter((c) => c.kind === 'police' && !c.touched && c.occupant !== 'player');
+  policeCars.length = 0;
+  for (const c of g.cars) {
+    if (c.kind === 'police' && !c.touched && c.occupant !== 'player') policeCars.push(c);
+  }
   const desired = g.stars === 0 ? 0 : Math.min(4, g.stars);
   g.policeSpawnCd -= dt;
   // A wrecked unit is out of the response: it burns where it died until
@@ -233,7 +241,8 @@ export function updatePolice(g, dt, time) {
   // mute the next response entirely. (It stays in policeCars for the
   // loop below — lights, and stopped-car bust pressure — exactly as a
   // wrecked unit behaved while the heat was up before.)
-  const activeUnits = policeCars.reduce((n, c) => n + (c.wrecked ? 0 : 1), 0);
+  let activeUnits = 0;
+  for (const c of policeCars) if (!c.wrecked) activeUnits += 1;
   if (activeUnits < desired && g.policeSpawnCd <= 0) {
     const point = spawnPoint(g);
     if (point) {

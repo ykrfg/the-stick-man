@@ -10,6 +10,12 @@ import { makeTextSprite } from './world3d.js';
 
 const SIDEWALK_OFFSET = 71;
 
+// Every crossing line, built once from the (constant) road grid. walkSidewalk
+// used to rebuild these two arrays with flatMap for every walking pedestrian
+// on every frame.
+const CROSS_LINES_Y = ROAD.streets.flatMap((s) => [s - SIDEWALK_OFFSET, s + SIDEWALK_OFFSET]);
+const CROSS_LINES_X = ROAD.avenues.flatMap((a) => [a - SIDEWALK_OFFSET, a + SIDEWALK_OFFSET]);
+
 /** Sidewalk lines run beside every road: avenue lines are constant-x, street lines constant-y. */
 function randomSidewalkPoint(rng) {
   if (rng.chance(0.55)) {
@@ -457,9 +463,7 @@ function walkSidewalk(g, ped, dt, speed) {
   else ped.x += ped.dir * speed * dt;
   ped.angle = ped.axis === 'y' ? (ped.dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (ped.dir > 0 ? 0 : Math.PI);
   // Crossings: the perpendicular sidewalk lines of every crossing road.
-  const lines = ped.axis === 'y'
-    ? ROAD.streets.flatMap((s) => [s - SIDEWALK_OFFSET, s + SIDEWALK_OFFSET])
-    : ROAD.avenues.flatMap((a) => [a - SIDEWALK_OFFSET, a + SIDEWALK_OFFSET]);
+  const lines = ped.axis === 'y' ? CROSS_LINES_Y : CROSS_LINES_X;
   const pos = ped.axis === 'y' ? ped.y : ped.x;
   for (const line of lines) {
     if (Math.abs(pos - line) < speed * dt + 1.5 && ped.turnCd <= 0) {

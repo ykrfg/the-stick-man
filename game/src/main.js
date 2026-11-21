@@ -978,13 +978,12 @@ function handleInteract() {
  */
 function computeAimAngle() {
   const p = g.player;
-  const ndc = new THREE.Vector2(
+  aimNdc.set(
     (g.input.mouse.x / g.viewW) * 2 - 1,
     -(g.input.mouse.y / g.viewH) * 2 + 1,
   );
-  const ray = new THREE.Raycaster();
-  ray.setFromCamera(ndc, camera);
-  const { origin, direction } = ray.ray;
+  aimRay.setFromCamera(aimNdc, camera);
+  const { origin, direction } = aimRay.ray;
   if (direction.y > -0.05) { g.aimPoint = null; return null; }
   const t = -origin.y / direction.y;
   const wx = origin.x + direction.x * t;
@@ -995,6 +994,14 @@ function computeAimAngle() {
 
 const camPos = new THREE.Vector3(900, 420, 300);
 const camLook = new THREE.Vector3(1270, 10, 1100);
+// Reused per-frame scratch: computeAimAngle runs on every on-foot frame, and
+// the camera needs one anchor and one direction vector per frame. Allocating
+// them per call was pure garbage; setFromCamera and the field writes below
+// overwrite every value, so the results are identical.
+const aimNdc = new THREE.Vector2();
+const aimRay = new THREE.Raycaster();
+const camAnchor = { x: 0, y: 0, z: 0 };
+const camDir = { x: 0, y: 0, z: 0 };
 
 /** Move the camera for the current state: title orbit, foot follow, car chase. */
 // GTA-style camera zoom steps (slant range from the hero). Round #22:
@@ -1162,7 +1169,10 @@ function updateCamera(dt) {
   const inCar = p.state === 'car' && !!p.car;
   const facing = inCar ? p.car.angle : p.angle;
   const speedFrac = inCar ? Math.min(1, Math.abs(p.car.speed) / CAR.maxSpeed) : 0;
-  const anchor = { x: p.x, y: 18, z: p.y };
+  camAnchor.x = p.x;
+  camAnchor.y = 18;
+  camAnchor.z = p.y;
+  const anchor = camAnchor;
 
   // Control state (yaw, pitch, zoom, look-back, auto-align) was settled
   // earlier in the frame by updateCameraControl; this only positions the
@@ -1221,7 +1231,10 @@ function updateCamera(dt) {
   const effDist = Math.min(cam.dist, cam.collDist);
   cam.lift = pitchEff - cam.pitch;
   const cpE = Math.cos(pitchEff);
-  const dirE = { x: Math.cos(yawEff) * cpE, y: Math.sin(pitchEff), z: Math.sin(yawEff) * cpE };
+  camDir.x = Math.cos(yawEff) * cpE;
+  camDir.y = Math.sin(pitchEff);
+  camDir.z = Math.sin(yawEff) * cpE;
+  const dirE = camDir;
 
   const tx = anchor.x + dirE.x * effDist;
   const ty = Math.max(7, anchor.y + dirE.y * effDist);

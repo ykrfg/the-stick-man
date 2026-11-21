@@ -15,6 +15,13 @@ const wheelGeo = new THREE.CylinderGeometry(5.6, 5.6, 4.2, 12);
 wheelGeo.rotateX(Math.PI / 2);
 const bodyGeo = new THREE.BoxGeometry(CAR.length, 10, CAR.width);
 const cabinGeo = new THREE.BoxGeometry(24, 8.5, 20.5);
+// Shared sub-parts: every car uses the same light, stripe, bar and bulb
+// shapes and the same glass. They were rebuilt per car.
+const lightGeo = new THREE.BoxGeometry(3.2, 1.6, 5.5);
+const stripeGeo = new THREE.BoxGeometry(CAR.length + 0.6, 3.6, CAR.width + 0.6);
+const barGeo = new THREE.BoxGeometry(13, 2.6, 9);
+const bulbGeo = new THREE.SphereGeometry(2.9, 10, 8);
+const glassMat = new THREE.MeshToonMaterial({ color: 0x9fd4e8, transparent: true, opacity: 0.5 });
 
 /** Build the mesh for one car. Police cars get a stripe and a flashing light bar. */
 export function makeCarMesh(colorHex, police = false) {
@@ -32,11 +39,10 @@ export function makeCarMesh(colorHex, police = false) {
   body.add(hull);
   group.add(body);
   if (police) {
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(CAR.length + 0.6, 3.6, CAR.width + 0.6), basicMat(0x23232b));
+    const stripe = new THREE.Mesh(stripeGeo, basicMat(0x23232b));
     stripe.position.y = 7.2;
     group.add(stripe);
   }
-  const glassMat = new THREE.MeshToonMaterial({ color: 0x9fd4e8, transparent: true, opacity: 0.5 });
   const cabin = new THREE.Mesh(cabinGeo, glassMat);
   cabin.position.set(-2, 16, 0);
   group.add(cabin);
@@ -47,7 +53,6 @@ export function makeCarMesh(colorHex, police = false) {
     group.add(wheel);
     wheels.push(wheel);
   }
-  const lightGeo = new THREE.BoxGeometry(3.2, 1.6, 5.5);
   const headL = new THREE.Mesh(lightGeo, basicMat(0xfff3a0));
   headL.position.set(24.2, 8.5, 7.5);
   const headR = headL.clone();
@@ -66,10 +71,9 @@ export function makeCarMesh(colorHex, police = false) {
   let glowL = null;
   let glowR = null;
   if (police) {
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(13, 2.6, 9), basicMat(0x23232b));
+    const bar = new THREE.Mesh(barGeo, basicMat(0x23232b));
     bar.position.set(-2, 21.2, 0); // sunk into the cabin roof, not resting exactly on it
     group.add(bar);
-    const bulbGeo = new THREE.SphereGeometry(2.9, 10, 8);
     lightL = new THREE.Mesh(bulbGeo, basicMat(0xff3b30));
     lightL.position.set(-2, 24.4, 3.2);
     lightR = new THREE.Mesh(bulbGeo, basicMat(0x2f7bff));
@@ -165,13 +169,18 @@ export function syncCarMesh(car, dt) {
   car.wheelSpin += (car.speed * dt) / 5.6;
   // Night-only light bloom: headlights always, the patrol bar alternating.
   const night = nightLevel();
-  if (car.beam) car.beam.material.opacity = car.wrecked ? 0 : night * 0.6;
+  if (car.beam) {
+    car.beam.material.opacity = car.wrecked ? 0 : night * 0.6;
+    car.beam.visible = !car.wrecked && night > 0.02;
+  }
   if (car.glowL && car.lightL) {
     car.sirenT = (car.sirenT ?? 0) + dt;
     const on = car.lightL.visible && !car.wrecked;
     const phase = Math.floor(car.sirenT * 3.4) % 2 === 0;
     car.glowL.material.opacity = on ? night * (phase ? 0.95 : 0.08) : 0;
     car.glowR.material.opacity = on ? night * (phase ? 0.08 : 0.95) : 0;
+    car.glowL.visible = on && night > 0.02;
+    car.glowR.visible = on && night > 0.02;
   }
   for (const wheel of car.wheels) wheel.rotation.z = -car.wheelSpin;
 }
@@ -1194,8 +1203,15 @@ export function updatePoliceLights(car, time) {
   // The bar's bloom follows the same beat, so the red and blue halves take
   // turns lighting up the street instead of glowing together.
   const night = nightLevel();
-  if (car.glowL) car.glowL.material.opacity = car.wrecked ? 0 : night * (phase ? 0.95 : 0.08);
-  if (car.glowR) car.glowR.material.opacity = car.wrecked ? 0 : night * (phase ? 0.08 : 0.95);
+  const show = !car.wrecked && night > 0.02;
+  if (car.glowL) {
+    car.glowL.material.opacity = car.wrecked ? 0 : night * (phase ? 0.95 : 0.08);
+    car.glowL.visible = show;
+  }
+  if (car.glowR) {
+    car.glowR.material.opacity = car.wrecked ? 0 : night * (phase ? 0.08 : 0.95);
+    car.glowR.visible = show;
+  }
 }
 
 /* ------------------------------------------------------------- owned cars */

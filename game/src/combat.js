@@ -52,6 +52,7 @@ export function spawnImpact(g, x, y, angle = 0, height = 24) {
 
 /** Advance and retire every live impact burst. */
 export function updateImpacts(g, dt) {
+  if (g.impacts.length === 0) return;
   for (const im of [...g.impacts]) {
     im.t += dt;
     const k = im.t / im.dur;
@@ -333,6 +334,7 @@ export function updateCombat(g, dt) {
 
 /** Move every bullet, test it against buildings, people and cars. */
 export function updateBullets(g, dt) {
+  if (g.bullets.length === 0) return;
   for (const bullet of [...g.bullets]) {
     bullet.x += bullet.vx * dt;
     bullet.y += bullet.vy * dt;
@@ -373,6 +375,7 @@ export function updateBullets(g, dt) {
 /** Spin the cash pickups and collect the ones the player walks over (or drives over). */
 export function updatePickups(g, dt, time) {
   const p = g.player;
+  if (g.pickups.length === 0) return;
   for (const pickup of [...g.pickups]) {
     pickup.mesh.userData.update(time, pickup.seed);
     const reach = p.state === 'car' ? 34 : 24;
