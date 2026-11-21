@@ -154,6 +154,7 @@ function buyGrade(gradeIndex) {
   const spec = {
     grade: gradeIndex, paint: 0, paints: [0], engine: 0, armor: 0, neon: null,
     glow: true, stolen: false, stolenX: null, stolenY: null,
+    posX: null, posY: null, posA: null,
   };
   g.saveData.owned.push(spec);
   deliverBought(spec, g.saveData.owned.length - 1);
@@ -999,13 +1000,40 @@ export function spawnOwnedCars(game) {
     const spec = list[i];
     if (spec.stolen) continue;
     if (g.cars.some((c) => c.owned && c.slot === i)) continue;
+    // Round #25: a car with a recorded last position comes back where
+    // the player left it, heading included. A car without one (never
+    // driven under the new build — every car in an older save) keeps
+    // the Motors-lot spawn it has always had.
+    const hasPos = Number.isFinite(spec.posX) && Number.isFinite(spec.posY);
     const lot = g.city.motorsLot?.[i % Math.max(1, g.city.motorsLot.length)] || { x: game.player.x + 80, y: game.player.y };
-    const car = spawnCar(g, 'parked', lot.x, lot.y, Math.PI / 2, MOTORS.paints[spec.paint]);
+    const car = spawnCar(
+      g, 'parked',
+      hasPos ? spec.posX : lot.x,
+      hasPos ? spec.posY : lot.y,
+      hasPos && Number.isFinite(spec.posA) ? spec.posA : Math.PI / 2,
+      MOTORS.paints[spec.paint],
+    );
     car.touched = true;
     car.slot = i;
     applyCarSpec(car, spec);
   }
   syncPins();
+}
+
+/**
+ * Bring back the last car the player stole (round #25): one ordinary
+ * stealable car of the recorded colour, standing where he left it.
+ * It is `touched` — the fleet systems leave it alone exactly like any
+ * car he has taken — and the tracker below keeps its record current
+ * for as long as it stays in the world.
+ */
+export function spawnLastStolenCar(game) {
+  g = game;
+  const rec = g.saveData?.lastStolen;
+  if (!rec || g.lastStolenCar) return;
+  const car = spawnCar(g, 'parked', rec.x, rec.y, rec.angle, rec.color);
+  car.touched = true;
+  g.lastStolenCar = car;
 }
 
 /* --------------------------------------------------------------- lifecycle */
@@ -1032,6 +1060,7 @@ export function initEconomy(game) {
   buildTray();
   game.shopOpen = null;
   game.stolenPins = [];
+  game.lastStolenCar = null;
   game.applyGear = applyGear;
   applyGear();
 }
@@ -1048,6 +1077,36 @@ export function updateEconomy(game, dt) {
     if (car.awayT > THEFT.after) reportStolen(car);
   }
   const list = g.saveData.owned || [];
+  // Last positions (round #25): each owned car's record follows its
+  // live car — driven, parked, even shoved by traffic — so a reload
+  // puts it back where it actually rests. A stolen-flagged car is the
+  // theft flow's business (its pin position rules), not this one's.
+  for (let i = 0; i < list.length; i += 1) {
+    const spec = list[i];
+    if (spec.stolen) continue;
+    const car = carForSlot(i);
+    if (!car) continue;
+    spec.posX = car.x;
+    spec.posY = car.y;
+    spec.posA = car.angle;
+  }
+  // The one recorded stolen car, likewise: its record tracks the live
+  // car while it sits in the world. A wreck — or a car somehow gone
+  // from the world — ends the record: a wreck is never resurrected.
+  const recCar = g.lastStolenCar;
+  if (recCar) {
+    if (!g.cars.includes(recCar) || recCar.wrecked) {
+      g.lastStolenCar = null;
+      if (g.saveData.lastStolen) {
+        g.saveData.lastStolen = null;
+        g.persist?.();
+      }
+    } else if (g.saveData.lastStolen) {
+      g.saveData.lastStolen.x = recCar.x;
+      g.saveData.lastStolen.y = recCar.y;
+      g.saveData.lastStolen.angle = recCar.angle;
+    }
+  }
   for (let i = 0; i < list.length; i += 1) {
     const spec = list[i];
     if (!spec.stolen || spec.stolenX === null) continue;
@@ -1068,6 +1127,7 @@ export function resetEconomy(game) {
     const i = g.cars.indexOf(car);
     if (i >= 0) g.cars.splice(i, 1);
   }
+  g.lastStolenCar = null;
   g.stolenPins = [];
   g.shopOpen = null;
   if (tray) tray.classList.remove('show');

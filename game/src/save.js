@@ -38,7 +38,18 @@ export function freshSave() {
     gear: freshGear(),
     fit: freshFit(),
     owned: [],
+    // The last car the player stole and drove (round #25):
+    // { color, x, y, angle } or null. One record only — stealing a
+    // different car moves it, and a wreck clears it.
+    lastStolen: null,
   };
+}
+
+/** The recorded last-stolen car, validated: a colour and a finite spot. */
+function cleanStolen(s) {
+  if (!s || typeof s !== 'object') return null;
+  if (!Number.isFinite(s.x) || !Number.isFinite(s.y) || !Number.isFinite(s.angle)) return null;
+  return { color: int(s.color, 0, 0, 0xffffff), x: s.x, y: s.y, angle: s.angle };
 }
 
 const int = (v, fallback, min, max) => (
@@ -74,6 +85,13 @@ function cleanCar(c) {
     stolen: c.stolen === true,
     stolenX: Number.isFinite(c.stolenX) ? c.stolenX : null,
     stolenY: Number.isFinite(c.stolenY) ? c.stolenY : null,
+    // Last place the player left this car (round #25): where it spawns
+    // on the next load, heading included. Null until the car has been
+    // in the world under the new build — a car without a recorded spot
+    // (every car in an older save) keeps the Motors-lot spawn.
+    posX: Number.isFinite(c.posX) ? c.posX : null,
+    posY: Number.isFinite(c.posY) ? c.posY : null,
+    posA: Number.isFinite(c.posA) ? c.posA : null,
   };
 }
 
@@ -120,6 +138,7 @@ export function loadSave() {
         },
       },
       owned: Array.isArray(data.owned) ? data.owned.map(cleanCar).filter(Boolean) : [],
+      lastStolen: cleanStolen(data.lastStolen),
     };
   } catch {
     return null;

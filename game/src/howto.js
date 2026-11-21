@@ -20,7 +20,7 @@ const SECTIONS = [
     'howto.touch.0', 'howto.touch.1', 'howto.touch.2',
     'howto.touch.3', 'howto.touch.4', 'howto.touch.5',
   ]],
-  ['howto.cars.h', ['howto.cars.0', 'howto.cars.1', 'howto.cars.2', 'howto.cars.3']],
+  ['howto.cars.h', ['howto.cars.0', 'howto.cars.1', 'howto.cars.2', 'howto.cars.3', 'howto.cars.4']],
   ['howto.wanted.h', [
     'howto.wanted.0', 'howto.wanted.1', 'howto.wanted.2', 'howto.wanted.3', 'howto.wanted.4',
   ]],

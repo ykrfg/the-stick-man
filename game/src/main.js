@@ -32,8 +32,8 @@ import { initAudio, updateAudio } from './audio-director.js';
 import { closeHowto, howtoOpen, initHowto, openHowto, syncHowto } from './howto.js';
 import {
   callCar, closeCustomize, customizeOpen, economyBusy, economyInteract, fixerPrompt,
-  initEconomy, openCustomize, resetEconomy, shopPrompt, spawnOwnedCars, syncCustomize,
-  updateEconomy,
+  initEconomy, openCustomize, resetEconomy, shopPrompt, spawnLastStolenCar, spawnOwnedCars,
+  syncCustomize, updateEconomy,
 } from './economy.js';
 
 const params = new URLSearchParams(location.search);
@@ -218,6 +218,7 @@ initGfx(g);
 bindRenderer(renderer);
 initEconomy(g);
 if (!shotName) spawnOwnedCars(g);
+if (!shotName) spawnLastStolenCar(g);
 if (!shotName) initAudio(g);
 if (!shotName) initHowto();
 if (shotName) setQuality(2);
@@ -476,6 +477,23 @@ function finishEnterCar() {
     }
   }
   p.fig.target.crouch = 0;
+  // Round #25: the car the player just took becomes the recorded
+  // "last stolen car" — it stays where he leaves it, across reloads
+  // (spawnLastStolenCar + the tracker in updateEconomy). Mission-bound
+  // cars are never recorded while the mission holds them: the REPO
+  // JOB's target and the COURIER HIT car keep their own bookkeeping,
+  // and recording one mid-mission could resurrect it under the
+  // mission's feet. Once a mission lets its car go it is just a car
+  // in the world, and taking it after that records it like any other.
+  if (!car.owned) {
+    const m = g.mission;
+    const missionBound = !!(m && m.active && (m.targetCar === car || m.courier === car));
+    if (!missionBound && g.lastStolenCar !== car) {
+      g.lastStolenCar = car;
+      g.saveData.lastStolen = { color: car.color, x: car.x, y: car.y, angle: car.angle };
+      persist();
+    }
+  }
   // Getting into your OWN car is not a crime: the stealCar heat only
   // fires for a car that is not the player's (round #22 — before this,
   // every entry into a bought car cost 40 heat, a star at the first
@@ -528,6 +546,19 @@ function exitCar() {
     angle: a,
   };
   g.sfx.carDoor();
+  // Round #25: stepping out is the moment a car's last position must
+  // be durable — the economy tracker keeps the records current frame
+  // by frame, and this persist lands them even if the tab closes now.
+  // A car wrecked out from under the player (the playerwreck flow
+  // lands here too) leaves the stolen record instead: a wreck is
+  // never resurrected by it.
+  if (car === g.lastStolenCar && car.wrecked) {
+    g.lastStolenCar = null;
+    g.saveData.lastStolen = null;
+    persist();
+  } else if (car.owned || car === g.lastStolenCar) {
+    persist();
+  }
 }
 
 function doBusted() {
