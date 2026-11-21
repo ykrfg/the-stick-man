@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { MUZZLE_FLASH_TIME, PLAYER } from './config.js';
 import { buildingAt } from './city.js';
-import { hurtPed } from './people.js';
+import { hurtPed, resolvePedCollision } from './people.js';
 import { damageCar } from './vehicles.js';
 import { basicMat } from './stick3d.js';
 import { makeCashPickup } from './world3d.js';
@@ -233,6 +233,11 @@ function landPunch(g) {
     if (ped.state === 'down') downed = true;
     ped.x += Math.cos(dir) * 9;
     ped.y += Math.sin(dir) * 9;
+    // The shove stops at walls (round #24): a man punched down with
+    // his back to a facade used to land inside it and lie there for
+    // the whole down time — the knockback is a displacement like any
+    // other and resolves against the buildings near him.
+    resolvePedCollision(g, ped);
     if (!hitSomething) {
       hitX = ped.x;
       hitY = ped.y;

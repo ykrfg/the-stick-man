@@ -67,6 +67,12 @@ export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex
     dir: spot.dir,
     speedNow: 0,
     turnCd: rng.range(0, 1),
+    // Sidewalk anti-deadlock state (walkSidewalk): how long a building
+    // face has been cancelling this walker's step outright (a quarter
+    // second of it turns him back the way he came), and the lateral
+    // detour offset the building resolver last imposed on his line.
+    blockedT: 0,
+    lineOff: 0,
     scaredT: 0,
     downT: 0,
     // Fighter car-dodge (updatePeds): the dive's remaining time, its
@@ -367,13 +373,86 @@ export function updatePlayerOnFoot(g, dt) {
       const d = Math.sqrt(d2);
       ped.x += (dx / d) * 26 * dt;
       ped.y += (dy / d) * 26 * dt;
+      // The shove itself must respect walls: leaning on a man who is
+      // standing against a facade used to press him into it until his
+      // own state's next resolution (Bruno is excluded above for the
+      // same reason; now everyone gets the guarantee directly).
+      resolvePedCollision(g, ped);
     }
   }
+}
+
+/**
+ * Pedestrian building collision (round #24). A person is an 11-unit
+ * circle and must never end a frame inside a building — but the
+ * sidewalk graph alone cannot promise that: its lines run at road
+ * centre +/- 71, and the procedural block fill starts buildings 16
+ * units inside the block edge (road half-width 55), so for two of the
+ * three fill styles the building face lies EXACTLY on the line, and a
+ * few landmark footprints span the line outright. walkSidewalk pins a
+ * walker to his line every frame, so without resolution he strolled
+ * with his body in the wall along whole block faces (the user's
+ * "pedestrians pass through walls"). Cars resolve against the whole
+ * city (resolveCircleCollision); a crowd cannot afford that per head
+ * per frame, so peds resolve against a static grid index of the city:
+ * each cell lists only the buildings and trees whose expanded
+ * footprints reach into it — every building a person standing in the
+ * cell could possibly touch. The push-out math is
+ * resolveCircleCollision's own, run on the cell shim, so a ped slides
+ * along a face exactly the way a car does, and a centre that somehow
+ * lands inside a footprint leaves by its nearest face.
+ */
+const PED_CELL = 128;
+const PED_CELL_PAD = 16; // >= the ped radius: a cell lists everything that can touch it
+let pedGridFor = null;
+let pedGrid = null;
+
+function buildPedGrid(city) {
+  const grid = new Map();
+  const put = (key, kind, item) => {
+    let cell = grid.get(key);
+    if (!cell) {
+      cell = { buildings: [], trees: [] };
+      grid.set(key, cell);
+    }
+    cell[kind].push(item);
+  };
+  const span = (v0, v1) => [Math.floor(v0 / PED_CELL), Math.floor(v1 / PED_CELL)];
+  for (const b of city.buildings) {
+    const [cx0, cx1] = span(b.x - PED_CELL_PAD, b.x + b.w + PED_CELL_PAD);
+    const [cy0, cy1] = span(b.y - PED_CELL_PAD, b.y + b.h + PED_CELL_PAD);
+    for (let cx = cx0; cx <= cx1; cx += 1) {
+      for (let cy = cy0; cy <= cy1; cy += 1) put(`${cx},${cy}`, 'buildings', b);
+    }
+  }
+  for (const t of city.trees) {
+    // Tree collision reaches 18 from the centre (resolveCircleCollision).
+    const [cx0, cx1] = span(t.x - 20, t.x + 20);
+    const [cy0, cy1] = span(t.y - 20, t.y + 20);
+    for (let cx = cx0; cx <= cx1; cx += 1) {
+      for (let cy = cy0; cy <= cy1; cy += 1) put(`${cx},${cy}`, 'trees', t);
+    }
+  }
+  return grid;
+}
+
+const EMPTY_CELL = { buildings: [], trees: [] };
+
+/** Push a pedestrian's circle out of the buildings and trees near him. */
+export function resolvePedCollision(g, ped) {
+  if (pedGridFor !== g.city) {
+    pedGridFor = g.city;
+    pedGrid = buildPedGrid(g.city);
+  }
+  const key = `${Math.floor(ped.x / PED_CELL)},${Math.floor(ped.y / PED_CELL)}`;
+  return resolveCircleCollision(pedGrid.get(key) ?? EMPTY_CELL, ped, PLAYER.radius);
 }
 
 /** Walk one person along the sidewalk graph, turning at crossings. */
 function walkSidewalk(g, ped, dt, speed) {
   ped.turnCd -= dt;
+  const startAxis = ped.axis;
+  const startPos = ped.axis === 'y' ? ped.y : ped.x;
   if (ped.axis === 'y') ped.y += ped.dir * speed * dt;
   else ped.x += ped.dir * speed * dt;
   ped.angle = ped.axis === 'y' ? (ped.dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (ped.dir > 0 ? 0 : Math.PI);
@@ -395,6 +474,7 @@ function walkSidewalk(g, ped, dt, speed) {
           ped.x = line;
           ped.line = line;
         }
+        ped.lineOff = 0; // a new line starts with no detour offset
         ped.dir = g.rng.chance(0.5) ? 1 : -1;
       } else if (g.rng.chance(0.06)) {
         ped.dir *= -1;
@@ -402,9 +482,54 @@ function walkSidewalk(g, ped, dt, speed) {
       break;
     }
   }
-  if (ped.axis === 'y') ped.x = ped.line;
-  else ped.y = ped.line;
+  // Pin to the line — through the detour offset the resolver last
+  // imposed (see below), not the bare line: where a face sits on the
+  // line, the working path is one radius off it, and re-pinning to the
+  // bare line inside the gap between two buildings would seat him
+  // between their corners, where both exits are head-on (the alley
+  // trap measured in ped-clip-probe's first run).
+  const off = ped.lineOff ?? 0;
+  if (ped.axis === 'y') ped.x = ped.line + off;
+  else ped.y = ped.line + off;
   if (ped.x < 30 || ped.x > WORLD.width - 30 || ped.y < 30 || ped.y > WORLD.height - 30) ped.dir *= -1;
+  // The line is a guide, not a promise of clearance: where a building
+  // face lies on (or across) the line, the walker steps out to the
+  // face and strolls the gutter line instead of the wall (round #24).
+  resolvePedCollision(g, ped);
+  // Keep the resolver's word over the pin's: if the push-out moved him
+  // across his axis, that offset becomes his working line (lineOff)
+  // until the bare line is clear again, where it decays home. A purely
+  // along-axis push (head-on into a face) leaves the offset alone —
+  // the blocked rule below handles that case.
+  const crossNow = ped.axis === 'y' ? ped.x : ped.y;
+  if (Math.abs(crossNow - (ped.line + off)) > 0.01) {
+    ped.lineOff = crossNow - ped.line;
+  } else if (off !== 0) {
+    ped.lineOff = off * Math.max(0, 1 - 2.5 * dt);
+    if (Math.abs(ped.lineOff) < 0.3) ped.lineOff = 0;
+  }
+  // Head-on is the one case a push-out cannot solve: where a footprint
+  // SPANS the line (the Safehouse and Motors frontages) or the next
+  // building of an alley faces him across the gap, the resolver cancels
+  // his step outright, every frame, and the pin leaves him no lateral
+  // room to slide around the corner. If his along-axis progress stays
+  // cancelled for a quarter of a second he treats the way as blocked
+  // and turns back the way he came — a citizen detour, never a freeze.
+  // (A corner he could round resolves within a frame or two, well
+  // under the threshold, so rounding never triggers this.)
+  const stepLen = speed * dt;
+  const progressed = ped.axis === startAxis
+    ? Math.abs((ped.axis === 'y' ? ped.y : ped.x) - startPos)
+    : stepLen;
+  if (stepLen > 0.01 && progressed < stepLen * 0.25) {
+    ped.blockedT = (ped.blockedT ?? 0) + dt;
+    if (ped.blockedT > 0.25) {
+      ped.dir *= -1;
+      ped.blockedT = 0;
+    }
+  } else {
+    ped.blockedT = 0;
+  }
   ped.speedNow = speed;
 }
 
@@ -420,7 +545,7 @@ function moveToward(g, ped, tx, ty, dt, speed) {
     ped.y += (dy / d) * step;
   }
   ped.speedNow = d > 4 ? speed : 0;
-  resolveCircleCollision(g.city, ped, PLAYER.radius);
+  resolvePedCollision(g, ped);
   clampToWorld(ped, 16);
   return d;
 }
@@ -482,7 +607,7 @@ export function updatePeds(g, dt, time) {
         ped.dodgeY = (ped.dodgeY ?? 0) * diveDecay;
         ped.speedNow = Math.hypot(ped.dodgeX ?? 0, ped.dodgeY ?? 0);
         ped.fig.target.crouch = 1;
-        resolveCircleCollision(g.city, ped, PLAYER.radius);
+        resolvePedCollision(g, ped);
         clampToWorld(ped, 16);
         syncFigure(ped, dt, time);
         continue;
@@ -520,6 +645,10 @@ export function updatePeds(g, dt, time) {
             const step = Math.min(d, 92 * dt);
             ped.x += (dx / d) * step;
             ped.y += (dy / d) * step;
+            // The walk home is a straight line; if a shove ever left
+            // him on the far side of the diner wall, he slides along
+            // its face to his post instead of strolling through it.
+            resolvePedCollision(g, ped);
             ped.speedNow = 60;
           }
         }

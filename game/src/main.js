@@ -1404,8 +1404,8 @@ function frame(now) {
           // (or, to the player, looking like the car refused him).
           // Tracking the door makes him run alongside and climb in as
           // it rolls — and a stopped car behaves exactly as before.
-          // The approach eases in and out, the body turns to the door
-          // and the right hand comes up to the handle in the last half:
+          // The approach eases in and out, the body faces the car and
+          // the right hand comes up to the handle in the last half:
           // a scramble, not a slide.
           const a = tr.car.angle;
           tr.doorX = tr.car.x + Math.sin(a) * 34;
@@ -1415,8 +1415,23 @@ function frame(now) {
           const e = k * k * (3 - 2 * k);
           p.x = tr.fromX + (tr.doorX - tr.fromX) * e;
           p.y = tr.fromY + (tr.doorY - tr.fromY) * e;
-          const face = Math.atan2(tr.doorY - p.y, tr.doorX - p.x);
-          if (Number.isFinite(face) && wdt > 0) {
+          // Face the CAR, never the door point (round #24): the old
+          // target was the door point itself, whose direction diverges
+          // from the car everywhere but a straight-on approach — a man
+          // who pressed E standing between the car and its door (inside
+          // the 34-unit door ring, the natural spot after walking up to
+          // the flank) had the door BEHIND him and turned his back to
+          // the car for the whole scramble (178 degrees of error,
+          // entry-facing-probe G1); flank approaches ended ~90 degrees
+          // off, and a man already at the door got atan2(0, 0). The
+          // direction to the car's centre is the door's inward normal
+          // exactly at the door and stays meaningful on every approach
+          // — except within a step of the centre itself, where there
+          // is no direction to face and the ease simply holds.
+          const fdx = tr.car.x - p.x;
+          const fdy = tr.car.y - p.y;
+          if (fdx * fdx + fdy * fdy > 1 && wdt > 0) {
+            const face = Math.atan2(fdy, fdx);
             p.angle += angleArc(p.angle, face) * (1 - Math.exp(-10 * wdt));
           }
           p.fig.target.crouch = Math.sin(k * Math.PI) * 0.9;
