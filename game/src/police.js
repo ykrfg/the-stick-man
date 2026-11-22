@@ -49,11 +49,11 @@ export function addHeat(g, amount, x, y, { force = false } = {}) {
   g.stars = stars;
 }
 
-/** Pick a road point 520–720px from the player for a police spawn. */
+/** Pick a road point 700–900px from the player for a police spawn. */
 function spawnPoint(g) {
   for (let tries = 0; tries < 10; tries += 1) {
     const angle = g.rng.range(0, Math.PI * 2);
-    const dist = g.rng.range(520, 720);
+    const dist = g.rng.range(700, 900);
     const x = g.player.x + Math.cos(angle) * dist;
     const y = g.player.y + Math.sin(angle) * dist;
     if (x < 60 || y < 60 || x > 3300 || y > 2460) continue;
@@ -207,11 +207,11 @@ export function updatePolice(g, dt, time) {
   // `cooling` is the HUD's "losing them" signal: it is true exactly while
   // heat is draining, so the blinking stars never lie about the state.
   g.cooling = false;
-  if (nearest > 430) {
+  if (nearest > 380) {
     g.coolT += dt;
-    if (g.coolT > 3.2 && g.heat > 0) {
+    if (g.coolT > 1.5 && g.heat > 0) {
       const prevStars = g.stars;
-      g.heat = Math.max(0, g.heat - 13 * dt);
+      g.heat = Math.max(0, g.heat - 22 * dt);
       g.stars = starsFor(g.heat);
       g.cooling = true;
       // A chase ended by stealth is an event worth announcing: fire at

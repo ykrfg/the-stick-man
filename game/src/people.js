@@ -700,7 +700,7 @@ export function updatePeds(g, dt, time) {
         const d = Math.hypot(target.x - ped.x, target.y - ped.y);
         // Officers stand down once the heat is gone. A far officer is
         // already out of the story — the cooling clear can only happen
-        // with every unit >430 away — and simply leaves the world. A
+        // with every unit >380 away — and simply leaves the world. A
         // NEAR officer walks back to his cruiser in the 'leave' state:
         // the instant clears (Spray 'n Go paint, the fixer) can zero
         // the heat with him at the player's elbow. (He used to be

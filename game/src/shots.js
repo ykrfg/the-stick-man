@@ -1,15 +1,14 @@
 // Deterministic screenshot scenes, selected with ?shot=<name>&seed=1. Each scene
 // composes the world the judge should see — a police chase for the cover, a busy
-// street, a mission marker, a fistfight — then freezes movement while the figures
-// keep posing (mid-stride gaits, a punch held at the strike), so a still frame
-// still reads as alive. Movement systems do not run in shot mode; only poses,
-// markers and police lights advance.
+// street, a mission meeting, a burning wreck at golden hour — then freezes
+// movement while the figures keep posing (mid-stride gaits, held expressions),
+// so a still frame still reads as alive. Movement systems do not run in shot
+// mode; only poses, markers and police lights advance.
 import { HEAT_THRESHOLDS } from './config.js';
 import { resolveCircleCollision } from './city.js';
 import { spawnPed, syncFigure } from './people.js';
-import { spawnCar, spawnPoliceCar, syncCarMesh, updatePoliceLights } from './vehicles.js';
+import { spawnCar, spawnPoliceCar, syncCarMesh, updatePoliceLights, wreckCar, updateWrecks } from './vehicles.js';
 import { starsFor } from './police.js';
-import { spawnImpact } from './combat.js';
 
 /** Spawn a bystander for a scene, pushed out of any building it landed inside. */
 function spawnShotPed(g, opts) {
@@ -57,111 +56,130 @@ export function setupShot(g, name) {
   g.saveData.earned = 0;
 
   if (name === 'cover') {
-    // A stolen red car tears south down the avenue with two police cars behind.
-    clearArea(g, 1574, 1350, 620);
-    const hero = spawnCar(g, 'traffic', 1574, 1420, Math.PI / 2, 0xef6461);
+    // A stolen red car tears south down the avenue at four stars: two
+    // cruisers on its tail, a third cutting in from the side street,
+    // traffic scattering ahead. The camera rides low behind the chase
+    // so the pursuit fills the frame instead of surveying it.
+    clearArea(g, 1590, 1300, 640);
+    const hero = spawnCar(g, 'traffic', 1586, 1335, Math.PI / 2, 0xef6461);
     seatPlayer(g, hero);
-    const cop1 = spawnPoliceCar(g, 1574, 1245);
+    // Nothing moves in shot mode, but the speedo reads the car's speed:
+    // let it tell the chase story too.
+    hero.speed = 320;
+    const cop1 = spawnPoliceCar(g, 1622, 1215);
     cop1.angle = Math.PI / 2;
-    const cop2 = spawnPoliceCar(g, 1652, 1150);
+    cop1.speed = 320;
+    const cop2 = spawnPoliceCar(g, 1558, 1105);
     cop2.angle = Math.PI / 2;
+    cop2.speed = 320;
+    const cop3 = spawnPoliceCar(g, 1835, 1155);
+    cop3.angle = Math.PI;
+    cop3.speed = 300;
     syncCarMesh(cop1, 0);
     syncCarMesh(cop2, 0);
-    g.heat = HEAT_THRESHOLDS[2] + 30;
+    syncCarMesh(cop3, 0);
+    // Traffic sharing the avenue: one car ahead in the hero's lane, one
+    // oncoming, one parked at the kerb.
+    spawnCar(g, 'traffic', 1586, 1590, Math.PI / 2, 0x7fb2d9);
+    spawnCar(g, 'traffic', 1658, 1560, -Math.PI / 2, 0xf2c14e);
+    spawnCar(g, 'traffic', 1522, 1245, Math.PI / 2, 0xc0c6ce);
+    g.heat = HEAT_THRESHOLDS[3] + 30;
     g.stars = starsFor(g.heat);
     g.mission.active = true;
     g.mission.index = 1;
     g.mission.phase = 'escape';
-    // The camera sits behind the police cars, looking down the avenue at the
-    // stolen car ahead of them: the whole pursuit in one frame.
     g.fixedCam = {
-      pos: { x: 1574, y: 200, z: 940 },
-      look: { x: 1574, y: 10, z: 1460 },
+      pos: { x: 1620, y: 120, z: 905 },
+      look: { x: 1588, y: 12, z: 1330 },
     };
     // Bystanders on the sidewalks for life.
     spawnShotPed(g, { role: 'ped', x: 1505, y: 1330 });
     spawnShotPed(g, { role: 'ped', x: 1712, y: 1500 });
   } else if (name === 'city') {
-    // On foot at a busy crossing, mid-stride, traffic rolling past.
-    clearArea(g, 1640, 1660, 260);
-    p.x = 1640;
-    p.y = 1662;
+    // On foot at a busy crossing, mid-stride in the crowd, traffic
+    // rolling past on both roads.
+    clearArea(g, 1620, 1670, 300);
+    p.x = 1620;
+    p.y = 1680;
     p.angle = 0.5;
     p.speedNow = 150;
     p.fig.setExpression('grin');
+    // [x, y, facing, stride speed]: crossing the street, waiting at the
+    // kerb, walking the sidewalks — one passer-by close to the camera.
     const spots = [
-      [1529, 1500], [1671, 1780], [1529, 1790], [1671, 1490], [1529, 1330], [1671, 1900],
+      [1560, 1620, 0, 100], [1705, 1735, Math.PI, 95], [1529, 1500, Math.PI / 2, 95],
+      [1671, 1780, -Math.PI / 2, 95], [1671, 1490, -Math.PI / 2, 95],
+      [1690, 1605, -2.6, 90], [1500, 1690, Math.PI / 2, 95],
+      [1745, 1560, -Math.PI / 2, 95], [1500, 1560, Math.PI / 2, 95], [1745, 1830, -Math.PI / 2, 95],
     ];
-    for (const [x, y] of spots) {
+    for (const [x, y, angle, speed] of spots) {
       const ped = spawnShotPed(g, { role: 'ped', x, y });
-      ped.speedNow = 95;
-      ped.angle = g.rng.range(0, Math.PI * 2);
+      ped.speedNow = speed;
+      ped.angle = angle;
     }
+    // Traffic: two cars on the avenue, one crossing on the street.
+    spawnCar(g, 'traffic', 1548, 1440, Math.PI / 2, 0xf2c14e);
+    spawnCar(g, 'traffic', 1658, 1420, -Math.PI / 2, 0x9fd356);
+    spawnCar(g, 'traffic', 1330, 1568, 0, 0xc0c6ce);
     // The camera stays over the avenue corridor so no building blocks the view.
     g.fixedCam = {
-      pos: { x: 1562, y: 98, z: 1852 },
-      look: { x: 1648, y: 18, z: 1652 },
+      pos: { x: 1540, y: 86, z: 1895 },
+      look: { x: 1635, y: 16, z: 1665 },
     };
   } else if (name === 'mission') {
-    // Walking the last stretch to the pier warehouse, the gold marker beam ahead.
-    // The approach is along the street south of the warehouse, camera behind.
-    const door = g.city.landmarks.pier;
-    clearArea(g, door.x - 60, door.y - 30, 320);
+    // Mission 2, first step: the hero walks the last stretch to Club
+    // Neon, where Shade is posted at the door — the objective text,
+    // the gold marker beam and Shade's name label all in one frame.
+    // Shade stands exactly where acceptMission posts him.
+    const club = g.city.landmarks.club;
+    clearArea(g, club.x + 10, club.y + 10, 300);
     g.mission.active = true;
-    g.mission.index = 0;
-    g.mission.phase = 'toWarehouse';
-    p.x = door.x - 70;
-    p.y = door.y + 72;
-    p.angle = Math.atan2(door.y - p.y, door.x - p.x);
+    g.mission.index = 1;
+    g.mission.phase = 'toClub';
+    const shade = spawnPed(g, { role: 'shade', x: club.x + 24, y: club.y + 10, name: 'SHADE' });
+    shade.fig.setExpression('angry');
+    shade.state = 'idle';
+    shade.homeX = shade.x;
+    shade.homeY = shade.y;
+    // Name labels are toggled by updatePeds, which shot mode never
+    // runs; the hero is at conversational range, so hold it on.
+    shade.label.visible = true;
+    g.mission.shade = shade;
+    p.x = club.x - 88;
+    p.y = club.y + 28;
+    p.angle = Math.atan2(shade.y - p.y, shade.x - p.x);
     p.speedNow = 140;
     p.fig.setExpression('neutral');
-    const guard = spawnShotPed(g, { role: 'ped', x: door.x + 80, y: door.y + 26 });
-    guard.speedNow = 0;
+    // Life around the club: a car parked along the street east of the
+    // corner, a bystander drifting past the door.
+    spawnCar(g, 'traffic', club.x + 205, club.y + 82, 0, 0x8e6fc8);
+    const passer = spawnShotPed(g, { role: 'ped', x: club.x + 105, y: club.y - 25 });
+    passer.speedNow = 95;
+    passer.angle = Math.PI;
     g.fixedCam = {
-      pos: { x: door.x - 340, y: 110, z: door.y + 250 },
-      look: { x: door.x - 30, y: 22, z: door.y + 20 },
+      pos: { x: club.x - 215, y: 82, z: club.y + 130 },
+      look: { x: club.x + 35, y: 24, z: club.y + 5 },
     };
-  } else if (name === 'fight') {
-    // A fistfight on the open intersection: the hero's cross landing at
-    // full extension, a rival caught in its own wind-up, another rival
-    // closing in. The hero is posed with posePunch: the fight used to
-    // loop a real punch on a timer, and a capture could land in the
-    // idle gap between swings — the one still in the dossier showed two
-    // men standing still. The phase is frozen at the strike (46% of the
-    // 0.44 s punch), so the frame is always the frame of impact.
-    clearArea(g, 1590, 1155, 340);
-    p.x = 1568;
-    p.y = 1150;
-    p.angle = 0.22; // squared up on the rival, not at empty road
+  } else if (name === 'beauty') {
+    // Golden hour on the coast road by the pier: a wreck still burning
+    // in the foreground, the hero standing over it, his own car parked
+    // behind him and the warehouse across the road. The fire is raised
+    // once, here at g.time = 0, and shot mode never advances it — the
+    // flames hold this exact pose in every capture.
+    const pier = g.city.landmarks.pier;
+    clearArea(g, pier.x - 130, pier.y + 90, 330);
+    const wreck = spawnCar(g, 'traffic', pier.x - 125, pier.y + 80, 0.9, 0x707880);
+    wreckCar(g, wreck);
+    updateWrecks(g, 0.5);
+    spawnCar(g, 'traffic', pier.x - 255, pier.y + 95, 0, 0xef6461);
+    p.x = pier.x - 145;
+    p.y = pier.y + 125;
+    p.angle = Math.atan2((pier.y + 80) - p.y, (pier.x - 125) - p.x);
     p.speedNow = 0;
-    p.fig.setExpression('angry');
-    p.fig.posePunch(0.46, 'R');
-    const rival = spawnPed(g, { role: 'rival', x: 1586, y: 1157, name: 'COLLECTOR' });
-    rival.angle = Math.PI - 0.08;
-    rival.speedNow = 0;
-    rival.fig.setExpression('angry');
-    rival.fig.posePunch(0.16, 'L'); // cocked, a beat from throwing
-    const rival2 = spawnPed(g, { role: 'rival', x: 1610, y: 1180, name: 'COLLECTOR' });
-    rival2.angle = Math.atan2(1150 - 1180, 1568 - 1610);
-    rival2.speedNow = 150;
-    rival2.fig.setExpression('angry');
-    // Frame it as Bruno's collection job so the HUD tells the same story, and
-    // register the rivals so the mission logic leaves the scene alone.
-    g.mission.active = true;
-    g.mission.index = 2;
-    g.mission.phase = 'fight';
-    g.mission.shopStep = 0;
-    g.mission.rivals = [rival, rival2];
-    // The burst of the hit, frozen: spawnImpact is only ever advanced by the
-    // live combat loop, so in a still it stays at its first frame. It sits
-    // just short of the rival's jaw, facing back down the punch.
-    spawnImpact(g, 1593, 1158, p.angle, 27.5);
-    // A side-on 3/4 of the exchange, from just off the fighters' front line:
-    // the hero reads left of frame, the rival right, and the punch crosses
-    // between them instead of the camera looking down the hero's shoulder.
+    p.fig.setExpression('neutral');
     g.fixedCam = {
-      pos: { x: 1630, y: 44, z: 1100 },
-      look: { x: 1588, y: 22, z: 1155 },
+      pos: { x: pier.x - 235, y: 50, z: pier.y + 215 },
+      look: { x: pier.x - 105, y: 22, z: pier.y + 70 },
     };
   }
 }
