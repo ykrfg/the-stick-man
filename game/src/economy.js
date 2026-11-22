@@ -21,6 +21,7 @@ let body = null;
 let titleEl = null;
 let subEl = null;
 let cashEl = null;
+let closeEl = null;
 
 const near = (p, spot, range) => !!spot && Math.hypot(p.x - spot.x, p.y - spot.y) < range;
 
@@ -56,7 +57,7 @@ function installStyle() {
   #smShopFoot { display:flex; align-items:center; justify-content:space-between;
     padding:10px 14px; border-top:1px solid rgba(255,255,255,0.12); }
   #smShopCash { font-size:13px; color:#8dff6a; font-variant-numeric:tabular-nums; }
-  #smShopClose { min-height:40px; padding:0 18px; border-radius:9px; font:inherit;
+  #smShopClose { min-height:40px; min-width:96px; padding:0 18px; border-radius:9px; font:inherit;
     background:#ffd94d; color:#1a1a22; border:0; font-weight:700; letter-spacing:1px; cursor:pointer; }
   `;
   document.head.appendChild(style);
@@ -77,7 +78,9 @@ function buildTray() {
   subEl = tray.querySelector('#smShopSub');
   body = tray.querySelector('#smShopBody');
   cashEl = tray.querySelector('#smShopCash');
-  tray.querySelector('#smShopClose').addEventListener('click', () => closeShop());
+  closeEl = tray.querySelector('#smShopClose');
+  closeEl.textContent = t('shop.close');
+  closeEl.addEventListener('click', () => closeShop());
   window.addEventListener('keydown', onKey);
 }
 
@@ -372,7 +375,7 @@ function rowsFor(kind) {
       });
       rows.push({
         label: t('shop.motors.call'), right: cash(MOTORS.call),
-        bad: g.money < MOTORS.call, on: () => callCar(),
+        bad: g.money < MOTORS.call, on: () => callCar(g),
       });
     }
     if (owned.some((s) => s.stolen)) {
@@ -470,6 +473,7 @@ function renderShop() {
   const kind = g.shopOpen;
   titleEl.textContent = t(PANEL_TITLE[kind]);
   subEl.textContent = t(PANEL_SUB[kind]);
+  if (closeEl) closeEl.textContent = t('shop.close');
   cashEl.textContent = t('shop.money', { money: cash(g.money) });
   body.innerHTML = '';
   rows = rowsFor(kind);
@@ -879,6 +883,13 @@ export function callCar(game) {
   car.summon = { x: spot.x, y: spot.y };
   g.say(t('banner.call.title'), t('banner.call.sub'), 3);
   g.persist?.();
+  // A call is a service, not a purchase: the car rolls in out in the
+  // world, and the world stays frozen while the tray is open — so a
+  // successful call from the desk closes the tray behind it (round
+  // #30). From the C key / CALL button no tray is open and closeShop()
+  // simply no-ops. The refusal paths above return early and keep the
+  // tray open: the player is still at the desk.
+  closeShop();
 }
 
 /** Roll a summoned car in toward its kerb spot, then let it sit. */
@@ -955,6 +966,11 @@ function recoverStolen(paid, want = -1) {
   g.sfx.confirm();
   g.persist?.();
   renderShop();
+  // The PAID desk recovery is a service, not a purchase: the car is
+  // back out in the world, so the tray closes behind it (round #30).
+  // The free walk-to-the-pin path (paid === false) never has a tray
+  // open and keeps its hands off it.
+  if (paid) closeShop();
 }
 
 /** The first slot whose live car is a wreck, or -1. */
@@ -985,6 +1001,10 @@ function recoverWrecked() {
   g.sfx.confirm();
   g.persist?.();
   renderShop();
+  // A service like the call and the theft recovery: the car is whole
+  // again out where it sits, so the tray closes behind it (round #30)
+  // — at the Motors desk and at the safehouse alike.
+  closeShop();
 }
 
 /** Map pins for the stolen cars, rebuilt as the save changes. */
