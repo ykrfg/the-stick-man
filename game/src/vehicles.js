@@ -472,6 +472,23 @@ function isMissionCritical(g, car) {
 }
 
 /**
+ * The REPO JOB's marked car, while that job is running: the one car in
+ * Palmera that can never be wrecked. damageCar floors its hp at 1, so
+ * it takes every hit — shoved, slowed, its hp billed down to the
+ * floor — but never crosses into the wreck state: a wrecked objective
+ * car could never be driven to the pier, and the job could neither
+ * complete nor fail. Deliberately NOT the courier (stopping that car
+ * by wrecking it is mission 5's intercept condition) and not any other
+ * mission or job car. The guard dies with the job: delivery and
+ * failMission both clear m.targetCar, and from then on the car wrecks
+ * like any other.
+ */
+function isRepoTarget(g, car) {
+  const m = g.mission;
+  return !!(m && m.active && m.index === 3 && m.targetCar === car);
+}
+
+/**
  * Run every wreck's afterlife for one frame: flames up while it burns,
  * dying down at the end of WRECK_BURN.burn, then the sink and removal
  * over WRECK_BURN.fade — except mission-critical wrecks, player-owned
@@ -483,8 +500,8 @@ function isMissionCritical(g, car) {
 export function updateWrecks(g, dt) {
   for (const car of [...g.cars]) {
     if (!car.wrecked) {
-      // Back from the dead (the REPO JOB quietly repairs its target car
-      // if it is wrecked before being taken): the fire goes out with
+      // Back from the dead (a wreck repaired at Spray 'n Go, or a
+      // bought car un-wrecked at the desk): the fire goes out with
       // the wreck state, and any sink is undone.
       if (car.fireFx) removeFireFx(g, car);
       if (car.sinkY) {
@@ -541,7 +558,11 @@ export function updateWrecks(g, dt) {
  */
 export function damageCar(g, car, amount) {
   if (car.wrecked || !(amount > 0)) return;
-  car.hp = Math.max(0, car.hp - amount);
+  // The REPO JOB's marked car floors at 1 hp instead of crossing to
+  // zero (see isRepoTarget): every damage path — fists, bullets and,
+  // via crashDamageCar below, crashes — funnels through here, so this
+  // one floor withholds the wreck from every source at once.
+  car.hp = Math.max(isRepoTarget(g, car) ? 1 : 0, car.hp - amount);
   if (car.hp <= 0) {
     wreckCar(g, car);
     if (car.occupant === 'player') g.events.push({ type: 'playerwreck', car });

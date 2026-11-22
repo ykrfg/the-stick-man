@@ -9,7 +9,7 @@
 import { HEAT_THRESHOLDS, RAID_TIME_BONUS, RAID_TIMER } from './config.js';
 import { makeMarker } from './world3d.js';
 import { removePed, spawnPed } from './people.js';
-import { driveCourier, removeCar, spawnCar, spawnCourierCar, syncCarMesh } from './vehicles.js';
+import { driveCourier, removeCar, spawnCar, spawnCourierCar } from './vehicles.js';
 import { addHeat } from './police.js';
 import { t } from './i18n.js';
 
@@ -126,9 +126,13 @@ function postCollectors(g) {
  * REPO JOB set-up, at accept time: the debtor's gold car parked on the
  * avenue curb behind the Ammo Hut, and his two guards posted beside it.
  * Everything exists from the moment Bruno hands the job out — the
- * approach shows a guarded car, never a pop-in. The car is extra tough
- * (and quietly repaired by the update loop while it is still the
- * objective) so an early shunt can never soft-lock the job.
+ * approach shows a guarded car, never a pop-in. The car is extra tough,
+ * and while the job runs it cannot be wrecked at all (damageCar in
+ * vehicles.js floors the marked car's hp at 1): a wrecked objective
+ * car could never be driven to the pier and the job would soft-lock,
+ * so the wreck itself is withheld — impacts still shove it, slow it
+ * and bill its hp down to the floor. The protection is this job's
+ * alone, and it ends the moment the job does.
  */
 function postRepoJob(g) {
   const m = g.mission;
@@ -765,17 +769,7 @@ export function updateMissions(g, dt, time) {
         g.say(t('say.repoClear.title'), t('say.repoClear.sub'), 3);
       }
     } else if (m.phase === 'repoSteal') {
-      if (car) {
-        setMarker(g, g.markerGold, car.x, car.y);
-        // The objective car must survive until it is taken: if anything
-        // wrecks it first, the job would soft-lock on an unenterable
-        // wreck, so it quietly comes back whole.
-        if (car.wrecked) {
-          car.wrecked = false;
-          car.hp = 200;
-          syncCarMesh(car, 0);
-        }
-      }
+      if (car) setMarker(g, g.markerGold, car.x, car.y);
       g.markerRed.visible = false;
       if (car && p.state === 'car' && p.car === car) {
         m.phase = 'repoDeliver';
