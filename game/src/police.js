@@ -194,9 +194,11 @@ export function updatePolice(g, dt, time) {
   const p = g.player;
   g.stars = starsFor(g.heat);
   // Cooling: heat drains while no police unit is close enough to watch.
+  // A wrecked cruiser watches nothing — it cannot hold the cooling open
+  // (the fleet count below already refuses to count it as a unit).
   let nearest = Infinity;
   for (const car of g.cars) {
-    if (car.kind === 'police') nearest = Math.min(nearest, Math.hypot(car.x - p.x, car.y - p.y));
+    if (car.kind === 'police' && !car.wrecked) nearest = Math.min(nearest, Math.hypot(car.x - p.x, car.y - p.y));
   }
   for (const ped of g.peds) {
     if (ped.role === 'cop' && ped.state === 'fight') nearest = Math.min(nearest, Math.hypot(ped.x - p.x, ped.y - p.y));
@@ -309,9 +311,12 @@ export function updatePolice(g, dt, time) {
           }
         }
       }
-    } else {
+    } else if (!car.wrecked) {
       chasePlayer(g, car, dt);
     }
+    // A wrecked unit is never driven, at any heat: its driver is done,
+    // it burns where it died (the stars === 0 branch above already
+    // refuses to drive it off), and only its lights still update.
     updatePoliceLights(car, time);
   }
 

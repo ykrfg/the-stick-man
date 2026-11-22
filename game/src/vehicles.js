@@ -646,27 +646,40 @@ export function moveFreeCar(g, car, dt) {
     const closing = -(relVx * nx + relVy * ny);
     // Positional separation always applies: it is what lets a slow push
     // grind a stopped or slower car ahead of you instead of bouncing off.
+    // A WRECKED car is the exception: dead weight never gives ground —
+    // the rule separateTrafficCars already keeps for traffic — so the
+    // mover takes the whole separation himself and the wreck is not
+    // shoved, knocked or slid by the hit at all. Without this, a
+    // cruiser still hunting the player bulldozed its own wrecked
+    // colleague down the street, half a push per frame for as long as
+    // the chase ran through the wreck's spot: a wreck that "kept
+    // moving" (measured: 87 units in one sampled chase).
     const push = (rr - d) / 2;
-    car.x += nx * push;
-    car.y += ny * push;
-    if (other.kind !== 'parked' || closing > 25) {
-      other.x -= nx * push * 0.5;
-      other.y -= ny * push * 0.5;
-      settleShovedCar(g, other);
+    if (other.wrecked) {
+      car.x += nx * push * 2;
+      car.y += ny * push * 2;
+    } else {
+      car.x += nx * push;
+      car.y += ny * push;
+      if (other.kind !== 'parked' || closing > 25) {
+        other.x -= nx * push * 0.5;
+        other.y -= ny * push * 0.5;
+        settleShovedCar(g, other);
+      }
     }
     if (closing > 55) {
       // A real impact, and its strength follows the speed DIFFERENCE (the
       // same /420 scale as a building hit, so the crash sound, the camera
       // shake and the hitCar heat in main.js all track the actual blow).
       const strength = Math.min(1, closing / 420);
-      if (other.kind === 'parked') {
+      if (other.kind === 'parked' && !other.wrecked) {
         // Parked cars have no update loop to carry a shove velocity, so
         // the knock lands as extra displacement right now.
         const extra = Math.min(44, closing * 0.13);
         other.x -= nx * extra;
         other.y -= ny * extra;
         settleShovedCar(g, other);
-      } else {
+      } else if (!other.wrecked) {
         other.shoveX -= nx * closing * 0.9;
         other.shoveY -= ny * closing * 0.9;
       }

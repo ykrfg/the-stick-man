@@ -17,7 +17,7 @@ import { buildCity } from './city.js';
 import { buildWorld } from './world3d.js';
 import { createFigure } from './stick3d.js';
 import { computeTrafficWarnings, damageCar, drivePlayerCar, spawnParkedCars, spawnTrafficCar, updatePlayerCarHits, updateTraffic, updateWrecks } from './vehicles.js';
-import { runOverPed, seatDriverFigure, spawnPeds, syncFigure, updatePeds, updatePlayerOnFoot } from './people.js';
+import { isEssential, runOverPed, seatDriverFigure, spawnPeds, syncFigure, updatePeds, updatePlayerOnFoot } from './people.js';
 import { spawnCashPickup, updateBullets, updateCombat, updatePickups } from './combat.js';
 import { addHeat, updatePolice } from './police.js';
 import {
@@ -656,11 +656,12 @@ function processEvents() {
         // full damage lands only on ordinary pedestrians.
         runOverPed(g, ev.ped, ev.speed);
         g.sfx.punch();
-        // Bruno himself never raises the heat: he only flinches, never
-        // falls, so the per-tick runover events would stack a star a
-        // frame for as long as the car rests against him. Everyone else
-        // keeps the plain per-event heat, exactly as before.
-        if (ev.byPlayer && ev.ped.role !== 'bruno') addHeat(g, HEAT_FOR.runOver, ev.ped.x, ev.ped.y);
+        // Essential men (Bruno, Shade) never raise the heat: they only
+        // flinch, never fall, so the per-tick runover events would
+        // stack a star a frame for as long as the car rests against
+        // them. Everyone else keeps the plain per-event heat, exactly
+        // as before.
+        if (ev.byPlayer && !isEssential(ev.ped)) addHeat(g, HEAT_FOR.runOver, ev.ped.x, ev.ped.y);
         break;
       }
       case 'crash':

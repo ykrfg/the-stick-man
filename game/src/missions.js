@@ -234,6 +234,11 @@ export function acceptMission(g) {
     m.shade = spawnPed(g, { role: 'shade', x: L.club.x + 24, y: L.club.y + 10, name: 'SHADE' });
     m.shade.fig.setExpression('angry');
     m.shade.state = 'idle';
+    // His post: Shade is essential like Bruno (people.js isEssential),
+    // and the idle post-keeping walks him back here if anything ever
+    // shoves him off the club door.
+    m.shade.homeX = m.shade.x;
+    m.shade.homeY = m.shade.y;
   } else if (m.index === 2) {
     m.phase = 'toShop';
     postCollectors(g);

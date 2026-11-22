@@ -171,9 +171,11 @@ function drawMinimap(g, ctx) {
   for (const car of g.cars) {
     if (car.kind === 'traffic') dot(car.x, car.y, 2.1, 'rgba(205,212,224,0.5)');
   }
-  // Police and rivals.
+  // Police and rivals. A wrecked cruiser draws no blip: it is out of
+  // the hunt, and the map says so — police.js agrees (it cannot hold
+  // the cooling open, and it no longer counts toward the fleet).
   for (const car of g.cars) {
-    if (car.kind === 'police') dot(car.x, car.y, 3.6, Math.floor(g.time * 5) % 2 ? '#ff5a4d' : '#5aa2ff');
+    if (car.kind === 'police' && !car.wrecked) dot(car.x, car.y, 3.6, Math.floor(g.time * 5) % 2 ? '#ff5a4d' : '#5aa2ff');
   }
   for (const ped of g.peds) {
     if (ped.state === 'down' || ped.state === 'inCar') continue;
