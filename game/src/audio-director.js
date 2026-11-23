@@ -1,16 +1,20 @@
-// The audio director: background music that follows the mood of the run, a
-// separate sound-effect bus, and the two volume sliders. Track files live in
-// game/audio/ and are optional: a missing file plays silence and nothing else
-// breaks. Mobile starts audio on the same first tap that starts the game.
+// The audio director.
 //
-// Volumes persist under their own key, away from the run save, so wiping
-// progress never resets them. Mute (M) stays session-only.
+// Owns the music: four looping tracks in game/audio/ (title, daytime roam,
+// night, chase) crossfaded after the mood of the run, on a bus of their
+// own, apart from the sound effects. A missing track file is just a quiet
+// game, never an error. The two volume sliders live on a small panel shown
+// over the title and pause screens; their values persist under a key of
+// their own, away from the progress save, so a reset never touches them.
+// The M-key mute is session-only and lives on the SoundFX side.
+//
+// Nothing here makes a sound until the first gesture: browsers hold audio
+// until then, and on mobile that gesture is the same tap that starts play.
 import { DAY_SECONDS } from './config.js';
 import { t } from './i18n.js';
 
 const VOL_KEY = 'the-stick-man-audio-v1';
-
-const TRACKS = {
+const TRACK_FILE = {
   title: 'audio/bgm_title.ogg',
   roam: 'audio/bgm_roam.ogg',
   night: 'audio/bgm_night.ogg',
@@ -19,135 +23,179 @@ const TRACKS = {
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
+// Director state. `deck` holds the two music elements in play: the one the
+// audience hears (front) and the one fading out beneath it (back).
 let game = null;
-let bgm = 0.7;
-let se = 1;
+let bgmLevel = 0.7;
+let seLevel = 1;
 let unlocked = false;
-let want = null;
-let current = null;
-let prev = null;
-const nodes = {};
+let wanted = null;
+const deck = { front: null, back: null };
+const elements = new Map();
 
-function readVolumes() {
-  let raw = null;
+/* ------------------------------------------------------------ persistence */
+
+function loadVolumes() {
+  let saved = null;
   try {
-    raw = JSON.parse(window.localStorage.getItem(VOL_KEY) || 'null');
+    saved = JSON.parse(window.localStorage.getItem(VOL_KEY) || 'null');
   } catch {
-    /* defaults stand */
+    /* unreadable storage: the defaults stand */
   }
-  if (raw && Number.isFinite(raw.bgm)) bgm = clamp01(raw.bgm);
-  if (raw && Number.isFinite(raw.se)) se = clamp01(raw.se);
+  if (saved && Number.isFinite(saved.bgm)) bgmLevel = clamp01(saved.bgm);
+  if (saved && Number.isFinite(saved.se)) seLevel = clamp01(saved.se);
 }
 
-function storeVolumes() {
+function saveVolumes() {
   try {
-    window.localStorage.setItem(VOL_KEY, JSON.stringify({ bgm, se }));
+    window.localStorage.setItem(VOL_KEY, JSON.stringify({ bgm: bgmLevel, se: seLevel }));
   } catch {
-    /* no storage: the volumes just do not persist */
+    /* storage refused: the levels just do not persist */
   }
 }
 
-function nodeFor(name) {
-  if (!nodes[name]) {
-    const el = new window.Audio(TRACKS[name]);
+/* ------------------------------------------------------------------ deck */
+
+function elementFor(name) {
+  if (!elements.has(name)) {
+    const el = new window.Audio(TRACK_FILE[name]);
     el.dataset.name = name;
     el.loop = true;
     el.preload = 'auto';
     el.volume = 0;
-    nodes[name] = el;
+    elements.set(name, el);
   }
-  return nodes[name];
+  return elements.get(name);
 }
 
-function playQuietly(el) {
+function startQuietly(el) {
   el.play().catch(() => {});
 }
 
-/* ---------------------------------------------------------------- sliders */
+/** Hand the stage to a new track: the old front steps back, still playing. */
+function bringUp(name) {
+  if (deck.front && deck.front.dataset.name === name) return;
+  if (deck.back && deck.back !== deck.front) deck.back.pause();
+  deck.back = deck.front;
+  deck.front = elementFor(name);
+  deck.front.volume = 0;
+  if (unlocked) startQuietly(deck.front);
+}
 
-const panelRefs = { panel: null, bgmInput: null, seInput: null, shown: null };
+/** Sink the back element toward silence; pause and clear it on arrival. */
+function sinkBack(step) {
+  const el = deck.back;
+  if (!el) return;
+  el.volume = Math.max(0, el.volume - step * 0.9);
+  if (el.volume <= 0.01) {
+    el.pause();
+    deck.back = null;
+  }
+}
+
+/* ---------------------------------------------------------- volume panel */
+
+const panel = { root: null, bgmIn: null, seIn: null, bgmLabel: null, seLabel: null, shown: null };
+
+const PANEL_CSS = `
+#smVol {
+  position: fixed; right: 14px; top: calc(120px + env(safe-area-inset-top));
+  display: none; flex-direction: column; gap: 7px; padding: 9px 12px; z-index: 30;
+  background: rgba(14,18,30,0.9); border: 1px solid rgba(255,255,255,0.22);
+  border-radius: 11px; color: #f4f1e6; font: 600 11px system-ui, sans-serif;
+  letter-spacing: 1px;
+}
+#smVol.show { display: flex; }
+#smVol label { display: flex; align-items: center; gap: 8px; }
+#smVol input { width: 100px; accent-color: #ffd94d; }
+`;
 
 function buildPanel() {
-  if (panelRefs.panel) return;
+  if (panel.root) return;
   if (!document.getElementById('smVolStyle')) {
     const style = document.createElement('style');
     style.id = 'smVolStyle';
-    style.textContent = `
-    #smVol { position:fixed; right:14px; top:calc(120px + env(safe-area-inset-top));
-      display:none; flex-direction:column; gap:7px; padding:9px 12px; z-index:30;
-      background:rgba(14,18,30,0.9); border:1px solid rgba(255,255,255,0.22);
-      border-radius:11px; color:#f4f1e6; font:600 11px system-ui,sans-serif;
-      letter-spacing:1px; }
-    #smVol.show { display:flex; }
-    #smVol label { display:flex; align-items:center; gap:8px; }
-    #smVol input { width:100px; accent-color:#ffd94d; }
-    `;
+    style.textContent = PANEL_CSS;
     document.head.appendChild(style);
   }
-  const panel = document.createElement('div');
-  panel.id = 'smVol';
-  panel.innerHTML = `
-    <label><span id="smVolBgmLabel"></span><input id="smVolBgm" type="range" min="0" max="100" step="1"></label>
-    <label><span id="smVolSeLabel"></span><input id="smVolSe" type="range" min="0" max="100" step="1"></label>`;
-  document.body.appendChild(panel);
-  panelRefs.panel = panel;
-  panelRefs.bgmInput = panel.querySelector('#smVolBgm');
-  panelRefs.seInput = panel.querySelector('#smVolSe');
-  panelRefs.bgmInput.value = String(Math.round(bgm * 100));
-  panelRefs.seInput.value = String(Math.round(se * 100));
-  panelRefs.bgmInput.addEventListener('input', () => setBgmVolume(Number(panelRefs.bgmInput.value) / 100));
-  panelRefs.seInput.addEventListener('input', () => {
-    const v = Number(panelRefs.seInput.value) / 100;
+  const root = document.createElement('div');
+  root.id = 'smVol';
+  const mkRow = (labelId, inputId) => {
+    const label = document.createElement('label');
+    const caption = document.createElement('span');
+    caption.id = labelId;
+    const input = document.createElement('input');
+    input.id = inputId;
+    input.type = 'range';
+    input.min = '0';
+    input.max = '100';
+    input.step = '1';
+    label.append(caption, input);
+    return { label, caption, input };
+  };
+  const bgmRow = mkRow('smVolBgmLabel', 'smVolBgm');
+  const seRow = mkRow('smVolSeLabel', 'smVolSe');
+  root.append(bgmRow.label, seRow.label);
+  document.body.appendChild(root);
+  panel.root = root;
+  panel.bgmIn = bgmRow.input;
+  panel.seIn = seRow.input;
+  panel.bgmLabel = bgmRow.caption;
+  panel.seLabel = seRow.caption;
+  panel.bgmIn.value = String(Math.round(bgmLevel * 100));
+  panel.seIn.value = String(Math.round(seLevel * 100));
+  panel.bgmIn.addEventListener('input', () => setBgmVolume(Number(panel.bgmIn.value) / 100));
+  panel.seIn.addEventListener('input', () => {
+    const v = Number(panel.seIn.value) / 100;
     if (game) setSeVolume(v, game);
     else setSeVolume(v);
   });
 }
 
-function setLabel(el, key) {
+function caption(el, key) {
   const text = t(key);
   if (el.textContent !== text) el.textContent = text;
 }
 
-function setSlider(input, value) {
-  if (document.activeElement !== input) input.value = String(Math.round(value * 100));
+function reflect(input, level) {
+  if (document.activeElement !== input) input.value = String(Math.round(level * 100));
 }
 
 function syncPanel() {
-  const { panel, bgmInput, seInput } = panelRefs;
-  if (!panel || !game) return;
+  if (!panel.root || !game) return;
   const show = game.state === 'title' || game.state === 'paused';
-  if (show !== panelRefs.shown) {
-    panelRefs.shown = show;
-    panel.classList.toggle('show', show);
+  if (show !== panel.shown) {
+    panel.shown = show;
+    panel.root.classList.toggle('show', show);
   }
   if (!show) return;
-  setLabel(panel.querySelector('#smVolBgmLabel'), 'audio.bgm');
-  setLabel(panel.querySelector('#smVolSeLabel'), 'audio.se');
-  setSlider(bgmInput, bgm);
-  setSlider(seInput, se);
+  caption(panel.bgmLabel, 'audio.bgm');
+  caption(panel.seLabel, 'audio.se');
+  reflect(panel.bgmIn, bgmLevel);
+  reflect(panel.seIn, seLevel);
 }
 
 /* ------------------------------------------------------------------- core */
 
-/** Build the buses and read saved volumes; main calls this once at boot. */
+/** Wire the buses and read the saved levels; called once at boot. */
 export function initAudio(g) {
   game = g;
-  readVolumes();
-  g.sfx.setSeVolume(se);
+  loadVolumes();
+  g.sfx.setSeVolume(seLevel);
   buildPanel();
-  const start = () => {
+  const openGate = () => {
     if (unlocked) return;
     unlocked = true;
     g.sfx.unlock();
-    if (want && !current) current = nodeFor(want);
-    if (current) playQuietly(current);
+    if (wanted && !deck.front) deck.front = elementFor(wanted);
+    if (deck.front) startQuietly(deck.front);
   };
-  window.addEventListener('pointerdown', start);
-  window.addEventListener('keydown', start);
+  window.addEventListener('pointerdown', openGate);
+  window.addEventListener('keydown', openGate);
 }
 
-/** Which track the run's mood calls for right now. */
-function choose(g) {
+/** The track the run's mood asks for: menus, heat, then the hour. */
+function moodFor(g) {
   if (g.state === 'title' || g.state === 'paused') return 'title';
   if (g.stars >= 2) return 'chase';
   const clock = typeof g.clock === 'number' ? g.clock : DAY_SECONDS / 2;
@@ -155,63 +203,45 @@ function choose(g) {
   return hour > 20.4 || hour < 5.6 ? 'night' : 'roam';
 }
 
-/** Move to a track: the old node fades out under the new one. */
-function begin(name) {
-  if (current && current.dataset.name === name) return;
-  if (prev && prev !== current) prev.pause();
-  prev = current;
-  current = nodeFor(name);
-  current.volume = 0;
-  if (unlocked) playQuietly(current);
-}
-
-/** Ease one fading-out node toward silence; retire it when it gets there. */
-function fadeOut(node, step) {
-  node.volume = Math.max(0, node.volume - step * 0.9);
-  if (node.volume > 0.01) return node;
-  node.pause();
-  return null;
-}
-
-/** Frame hook: pick the track, crossfade, and follow the sliders. */
+/** Frame hook: follow the mood, run the crossfade, mind the panel. */
 export function updateAudio(g, dt) {
   game = g;
-  want = choose(g);
-  if (!current) {
-    current = nodeFor(want);
-    if (unlocked) playQuietly(current);
-  } else if (current.dataset.name !== want) {
-    begin(want);
+  wanted = moodFor(g);
+  if (!deck.front) {
+    deck.front = elementFor(wanted);
+    if (unlocked) startQuietly(deck.front);
+  } else if (deck.front.dataset.name !== wanted) {
+    bringUp(wanted);
   }
   syncPanel();
   const step = Math.min(1, dt * 1.8);
-  if (current) {
-    const target = unlocked ? bgm : 0;
-    current.volume = clamp01(current.volume + (target - current.volume) * step);
-    if (g.sfx.muted) current.volume = 0;
+  if (deck.front) {
+    const goal = unlocked ? bgmLevel : 0;
+    deck.front.volume = clamp01(deck.front.volume + (goal - deck.front.volume) * step);
+    if (g.sfx.muted) deck.front.volume = 0;
   }
-  if (prev) prev = fadeOut(prev, step);
+  sinkBack(step);
 }
 
-/** Music volume 0..1 (persisted). */
+/** Music level 0..1; persisted, and reflected on the panel's slider. */
 export function setBgmVolume(v) {
-  bgm = clamp01(v);
-  storeVolumes();
-  if (panelRefs.bgmInput) panelRefs.bgmInput.value = String(Math.round(bgm * 100));
+  bgmLevel = clamp01(v);
+  saveVolumes();
+  if (panel.bgmIn) panel.bgmIn.value = String(Math.round(bgmLevel * 100));
 }
 
-/** Sound-effect volume 0..1 (persisted, applied to the SE bus). */
+/** Effects level 0..1; persisted, and pushed onto the SE bus. */
 export function setSeVolume(v, g) {
-  se = clamp01(v);
-  storeVolumes();
-  if (panelRefs.seInput) panelRefs.seInput.value = String(Math.round(se * 100));
-  if (g) g.sfx.setSeVolume(se);
+  seLevel = clamp01(v);
+  saveVolumes();
+  if (panel.seIn) panel.seIn.value = String(Math.round(seLevel * 100));
+  if (g) g.sfx.setSeVolume(seLevel);
 }
 
 export function bgmVolume() {
-  return bgm;
+  return bgmLevel;
 }
 
 export function seVolume() {
-  return se;
+  return seLevel;
 }

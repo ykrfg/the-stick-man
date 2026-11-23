@@ -1,247 +1,243 @@
-// Smartphone mode: a virtual joystick and thumb buttons for touch devices.
-// Everything here feeds the one input layer in input.js — buttons write the
-// same key codes the keyboard uses (KeyE, KeyF, KeyK, ShiftLeft, KeyP,
-// Enter) and the joystick writes input.stick — so no gameplay code knows or
-// cares which device is driving. Desktop (no touch, or a large screen)
-// never initialises this module and behaves exactly as before.
+// Touch controls for phones.
+//
+// A floating joystick under the left thumb and a cluster of buttons under
+// the right one. Nothing in here invents its own input vocabulary: buttons
+// write the very key codes the keyboard writes (KeyE, KeyF, KeyK, Space,
+// KeyP, Enter, ShiftLeft) into input.js's shared sets, and the joystick
+// writes input.stick, so the gameplay code cannot tell — and never has to
+// care — which device is driving. On a desktop this module is never
+// initialised and nothing about the game changes.
 import { PROMPT_PREFIX, t } from './i18n.js';
 
 /**
- * True when this looks like a phone: touch support and a small screen.
- * `force` (the ?mobile=1 query flag) turns the mode on anywhere, for
- * testing.
+ * Whether this device should run in phone mode: it can be touched AND its
+ * smaller screen edge is phone-sized. `force` (the ?mobile=1 flag) turns
+ * the mode on anywhere, for testing on a desktop.
  */
 export function detectMobile(force) {
   if (force) return true;
-  const touchCapable = (navigator.maxTouchPoints ?? 0) > 0 || 'ontouchstart' in window;
-  if (!touchCapable) return false;
-  return Math.min(window.innerWidth, window.innerHeight) <= 560;
+  const canTouch = (navigator.maxTouchPoints ?? 0) > 0 || 'ontouchstart' in window;
+  return canTouch && Math.min(window.innerWidth, window.innerHeight) <= 560;
 }
 
-const STICK_RADIUS = 46;
-const byId = (id) => document.getElementById(id);
+const STICK_TRAVEL = 46; // px the knob may wander from its origin
+const el = (id) => document.getElementById(id);
 
 /**
- * Wire the touch DOM (in index.html) into g.input. Returns { update,
- * relabel } — main.js calls update() once per frame to refresh labels and
- * visibility, and relabel() when the language changes.
+ * Wire the touch DOM declared in index.html into g.input. The returned
+ * pair is main.js's whole interface: update() once a frame (labels and
+ * visibility follow the game state) and relabel() on a language change.
  */
 export function initTouch(g) {
   document.body.classList.add('mobile');
   const input = g.input;
-  const els = {
-    zone: byId('stickZone'),
-    base: byId('stickBase'),
-    knob: byId('stickKnob'),
-    btns: byId('btns'),
-    pause: byId('btnPause'),
-    tap: byId('tapBtn'),
-    use: byId('btnUse'),
-    punch: byId('btnPunch'),
-    shoot: byId('btnShoot'),
-    sprint: byId('btnSprint'),
-    dash: byId('btnDash'),
-    call: byId('btnCall'),
+  const ui = {
+    zone: el('stickZone'), base: el('stickBase'), knob: el('stickKnob'),
+    btns: el('btns'), pause: el('btnPause'), tap: el('tapBtn'),
+    use: el('btnUse'), punch: el('btnPunch'), shoot: el('btnShoot'),
+    sprint: el('btnSprint'), dash: el('btnDash'), call: el('btnCall'),
   };
 
-  /* ---- Virtual joystick: dynamic origin wherever the left thumb lands. */
-  const stick = { id: null, ox: 0, oy: 0 };
-  const placeKnob = (dx, dy) => {
-    els.knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+  /* ---- The joystick: its origin is wherever the left thumb comes down,
+   * and the knob reports a normalised push of at most one in any direction. */
+  const stick = { touchId: null, originX: 0, originY: 0 };
+  const moveKnob = (dx, dy) => {
+    ui.knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
   };
-  const stickTo = (touch) => {
-    let dx = touch.clientX - stick.ox;
-    let dy = touch.clientY - stick.oy;
+  const pushStick = (touch) => {
+    let dx = touch.clientX - stick.originX;
+    let dy = touch.clientY - stick.originY;
     const len = Math.hypot(dx, dy);
-    if (len > STICK_RADIUS) {
-      dx = (dx / len) * STICK_RADIUS;
-      dy = (dy / len) * STICK_RADIUS;
+    if (len > STICK_TRAVEL) {
+      dx = (dx / len) * STICK_TRAVEL;
+      dy = (dy / len) * STICK_TRAVEL;
     }
-    placeKnob(dx, dy);
-    input.stick.x = dx / STICK_RADIUS;
-    input.stick.y = dy / STICK_RADIUS;
+    moveKnob(dx, dy);
+    input.stick.x = dx / STICK_TRAVEL;
+    input.stick.y = dy / STICK_TRAVEL;
     input.stick.active = true;
   };
-  const stickRelease = () => {
-    stick.id = null;
+  const letGoStick = () => {
+    stick.touchId = null;
     input.stick.x = 0;
     input.stick.y = 0;
     input.stick.active = false;
-    els.base.style.display = 'none';
+    ui.base.style.display = 'none';
   };
-  els.zone.addEventListener('touchstart', (e) => {
+  ui.zone.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    if (stick.id !== null) return;
+    if (stick.touchId !== null) return;
     const touch = e.changedTouches[0];
-    stick.id = touch.identifier;
-    stick.ox = touch.clientX;
-    stick.oy = touch.clientY;
-    els.base.style.left = `${stick.ox}px`;
-    els.base.style.top = `${stick.oy}px`;
-    els.base.style.display = 'block';
-    placeKnob(0, 0);
-    stickTo(touch);
+    stick.touchId = touch.identifier;
+    stick.originX = touch.clientX;
+    stick.originY = touch.clientY;
+    ui.base.style.left = `${stick.originX}px`;
+    ui.base.style.top = `${stick.originY}px`;
+    ui.base.style.display = 'block';
+    moveKnob(0, 0);
+    pushStick(touch);
   }, { passive: false });
-  els.zone.addEventListener('touchmove', (e) => {
+  ui.zone.addEventListener('touchmove', (e) => {
     e.preventDefault();
-    for (const touch of e.changedTouches) if (touch.identifier === stick.id) stickTo(touch);
+    for (const touch of e.changedTouches) if (touch.identifier === stick.touchId) pushStick(touch);
   }, { passive: false });
-  els.zone.addEventListener('touchend', (e) => {
-    for (const touch of e.changedTouches) if (touch.identifier === stick.id) stickRelease();
+  ui.zone.addEventListener('touchend', (e) => {
+    for (const touch of e.changedTouches) if (touch.identifier === stick.touchId) letGoStick();
   });
-  els.zone.addEventListener('touchcancel', () => stickRelease());
+  ui.zone.addEventListener('touchcancel', () => letGoStick());
 
-  /* ---- Buttons: hold-style writes into the shared key sets. */
-  const bindHold = (el, code) => {
-    el.addEventListener('touchstart', (e) => {
+  /* ---- Buttons. A hold writes its code for as long as the thumb is down;
+   * a tap writes a press and a release inside the one gesture. */
+  const holdButton = (node, code) => {
+    node.addEventListener('touchstart', (e) => {
       e.preventDefault();
       input.pressButton(code);
-      el.classList.add('on');
+      node.classList.add('on');
     }, { passive: false });
     const release = (e) => {
       e.preventDefault();
       input.releaseButton(code);
-      el.classList.remove('on');
+      node.classList.remove('on');
     };
-    el.addEventListener('touchend', release, { passive: false });
-    el.addEventListener('touchcancel', release, { passive: false });
+    node.addEventListener('touchend', release, { passive: false });
+    node.addEventListener('touchcancel', release, { passive: false });
   };
-  /** A tap: press and release in one gesture (and on a plain click). */
-  const bindTap = (el, code, alsoClick) => {
+  const tapButton = (node, code, withClick) => {
     const tap = () => {
       input.pressButton(code);
       input.releaseButton(code);
     };
-    el.addEventListener('touchstart', (e) => {
+    node.addEventListener('touchstart', (e) => {
       e.preventDefault();
       tap();
     }, { passive: false });
-    if (alsoClick) el.addEventListener('click', tap);
+    if (withClick) node.addEventListener('click', tap);
     return tap;
   };
-  bindHold(els.use, 'KeyE');
-  bindHold(els.punch, 'KeyF');
-  bindHold(els.shoot, 'KeyK');
-  // Dash rides the Space code, exactly like the desktop key.
-  bindHold(els.dash, 'Space');
-  // CALL is a tap: the same KeyC the keyboard uses to summon your own car.
-  bindTap(els.call, 'KeyC', true);
-  // Pause is a tap, not a hold.
-  bindTap(els.pause, 'KeyP', true);
-  // Sprint toggles: one less thumb to keep busy while steering.
-  let sprintOn = false;
-  els.sprint.addEventListener('touchstart', (e) => {
+  holdButton(ui.use, 'KeyE');
+  holdButton(ui.punch, 'KeyF');
+  holdButton(ui.shoot, 'KeyK');
+  holdButton(ui.dash, 'Space'); // dash and handbrake share the Space code
+  tapButton(ui.call, 'KeyC', true); // the same KeyC the keyboard summons with
+  tapButton(ui.pause, 'KeyP', true);
+
+  // Sprint is a toggle, not a hold: one thumb fewer to keep busy steering.
+  let sprintLatched = false;
+  ui.sprint.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    sprintOn = !sprintOn;
-    if (sprintOn) input.pressButton('ShiftLeft');
+    sprintLatched = !sprintLatched;
+    if (sprintLatched) input.pressButton('ShiftLeft');
     else input.releaseButton('ShiftLeft');
-    els.sprint.classList.toggle('on', sprintOn);
+    ui.sprint.classList.toggle('on', sprintLatched);
   }, { passive: false });
 
-  /* ---- Camera orbit: a drag that lands on the bare canvas — the free
-   * area covered by neither the stick zone nor the buttons — swings the
-   * camera. Deltas go into the shared input.orbit the desktop mouse drag
-   * also feeds. (Pinch zoom is deliberately not implemented: with the
-   * stick and buttons holding the other touches, a two-finger gesture on
-   * the free area alone proved too easy to trigger by accident.) */
-  const orbit = { id: null, x: 0, y: 0 };
-  const canvas = byId('game');
+  /* ---- Camera orbit: a drag across the bare canvas — the ground covered
+   * by neither the stick zone nor the buttons — feeds input.orbit, the
+   * same accumulator the desktop mouse drag feeds. Pinch zoom is left out
+   * on purpose: with the other touches spoken for, a two-finger gesture
+   * on the free area alone fired by accident too easily. */
+  const drag = { touchId: null, x: 0, y: 0 };
+  const canvas = el('game');
   canvas.addEventListener('touchstart', (e) => {
-    e.preventDefault(); // also stops the synthetic mouse events (would fire the pistol)
-    if (orbit.id !== null) return;
+    e.preventDefault(); // also swallows the synthetic mouse events (they would fire the pistol)
+    if (drag.touchId !== null) return;
     const touch = e.changedTouches[0];
-    orbit.id = touch.identifier;
-    orbit.x = touch.clientX;
-    orbit.y = touch.clientY;
+    drag.touchId = touch.identifier;
+    drag.x = touch.clientX;
+    drag.y = touch.clientY;
   }, { passive: false });
   canvas.addEventListener('touchmove', (e) => {
     e.preventDefault();
     for (const touch of e.changedTouches) {
-      if (touch.identifier !== orbit.id) continue;
-      input.orbit.dx += touch.clientX - orbit.x;
-      input.orbit.dy += touch.clientY - orbit.y;
-      orbit.x = touch.clientX;
-      orbit.y = touch.clientY;
+      if (touch.identifier !== drag.touchId) continue;
+      input.orbit.dx += touch.clientX - drag.x;
+      input.orbit.dy += touch.clientY - drag.y;
+      drag.x = touch.clientX;
+      drag.y = touch.clientY;
     }
   }, { passive: false });
-  const orbitRelease = (e) => {
-    for (const touch of e.changedTouches) if (touch.identifier === orbit.id) orbit.id = null;
+  const endDrag = (e) => {
+    for (const touch of e.changedTouches) if (touch.identifier === drag.touchId) drag.touchId = null;
   };
-  canvas.addEventListener('touchend', orbitRelease);
-  canvas.addEventListener('touchcancel', orbitRelease);
+  canvas.addEventListener('touchend', endDrag);
+  canvas.addEventListener('touchcancel', endDrag);
 
-  /* ---- The big state button: start, continue after busted/wasted, resume.
-   * Mouse fallback too (desktop with ?mobile=1): plain clicks work. */
-  bindTap(els.tap, 'Enter', true);
+  /* ---- The big state button: start the game, continue after a bust or a
+   * wasting, resume from pause. Clicks count too, for ?mobile=1 desktops. */
+  tapButton(ui.tap, 'Enter', true);
 
-  // Keep the page itself from scrolling, zooming or rubber-banding.
+  // The page itself must never scroll, zoom or rubber-band under the game.
   document.addEventListener('gesturestart', (e) => e.preventDefault());
   document.addEventListener('touchmove', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
 
+  /* ---- Labels and visibility, refreshed against the game state. `seen`
+   * remembers what the DOM currently shows so a frame only writes what
+   * actually changed. */
   const seen = { state: '', prompt: null, pistol: null, lang: null };
-  /** (Re)label every button in the current language. */
+
   function relabel() {
-    els.punch.textContent = t('touch.punch');
-    els.shoot.textContent = t('touch.shoot');
-    els.sprint.textContent = t('touch.sprint');
-    els.dash.textContent = t('touch.dash');
-    els.call.textContent = t('touch.call');
-    seen.state = ''; // force update() to re-derive the state button's label
-    seen.prompt = null; // and the USE button's
+    ui.punch.textContent = t('touch.punch');
+    ui.shoot.textContent = t('touch.shoot');
+    ui.sprint.textContent = t('touch.sprint');
+    ui.dash.textContent = t('touch.dash');
+    ui.call.textContent = t('touch.call');
+    seen.state = '';    // make update() re-derive the state button's label
+    seen.prompt = null; // ... and the USE button's
   }
 
-  function refreshChrome(state) {
+  function showChromeFor(state) {
     const inRun = state === 'play' || state === 'paused';
-    els.zone.style.display = state === 'play' ? 'block' : 'none';
-    els.btns.style.display = inRun ? 'block' : 'none';
-    els.pause.style.display = inRun ? 'block' : 'none';
-    els.tap.style.display = state === 'play' ? 'none' : 'block';
-    els.tap.textContent = state === 'title' ? t('touch.tapStart')
+    ui.zone.style.display = state === 'play' ? 'block' : 'none';
+    ui.btns.style.display = inRun ? 'block' : 'none';
+    ui.pause.style.display = inRun ? 'block' : 'none';
+    ui.tap.style.display = state === 'play' ? 'none' : 'block';
+    ui.tap.textContent = state === 'title' ? t('touch.tapStart')
       : state === 'paused' ? t('touch.resume') : t('touch.tapContinue');
-    if (state !== 'play' && stick.id !== null) stickRelease();
+    if (state !== 'play' && stick.touchId !== null) letGoStick();
   }
 
   function update() {
     const state = g.state;
     if (state !== seen.state) {
       seen.state = state;
-      refreshChrome(state);
+      showChromeFor(state);
     }
-    // The USE button wears the current prompt ("E — Talk to Bruno" → that).
-    // The "E — " key-cap prefix is the same in both languages (i18n.js), so
-    // the derivation — strip the prefix, shout what is left — works
-    // unchanged for Japanese prompts.
+    // USE wears the live prompt: "E — Talk to Bruno" becomes "TALK TO
+    // BRUNO". The "E — " key-cap prefix is identical in both languages
+    // (see i18n.js), so stripping it and shouting the rest works for
+    // Japanese prompts unchanged.
     const prompt = g.prompt ?? '';
     if (prompt !== seen.prompt) {
       seen.prompt = prompt;
-      els.use.textContent = prompt.startsWith(PROMPT_PREFIX)
+      ui.use.textContent = prompt.startsWith(PROMPT_PREFIX)
         ? prompt.slice(PROMPT_PREFIX.length).toUpperCase()
         : t('touch.use');
-      els.use.classList.toggle('on', prompt.length > 0);
+      ui.use.classList.toggle('on', prompt.length > 0);
     }
-    const pistol = g.player.hasPistol && state === 'play' && g.player.state === 'foot';
-    if (pistol !== seen.pistol) {
-      seen.pistol = pistol;
-      els.shoot.style.display = pistol ? 'flex' : 'none';
+    const showShoot = g.player.hasPistol && state === 'play' && g.player.state === 'foot';
+    if (showShoot !== seen.pistol) {
+      seen.pistol = showShoot;
+      ui.shoot.style.display = showShoot ? 'flex' : 'none';
     }
-    // Dash lives on foot only; in a car the same button is the handbrake
-    // (both write Space), so it stays up with its label switched. It dims
-    // while the on-foot dash cools down. CALL only means something once
-    // you own a car, and only in play.
+    // Dash lives on foot; in a car the same Space-writing button is the
+    // handbrake, so it stays up with its label switched, and on foot it
+    // dims while the dash cools down. CALL appears only once a car is
+    // owned, and only in play.
     const onFoot = state === 'play' && g.player.state === 'foot';
     const driving = state === 'play' && g.player.state === 'car' && !!g.player.car;
-    els.call.style.display = state === 'play' && (g.saveData.owned ?? []).length > 0 ? 'flex' : 'none';
-    els.dash.style.display = onFoot || driving ? 'flex' : 'none';
-    els.dash.classList.toggle('cool', onFoot && (g.player.dashCd ?? 0) > 0);
-    const dashLabel = t(driving ? 'touch.brake' : 'touch.dash');
-    if (els.dash.textContent !== dashLabel) els.dash.textContent = dashLabel;
-    // A language switch re-labels the static buttons once (main.js also
-    // calls relabel() directly; this keeps update() self-sufficient).
+    ui.call.style.display = state === 'play' && (g.saveData.owned ?? []).length > 0 ? 'flex' : 'none';
+    ui.dash.style.display = onFoot || driving ? 'flex' : 'none';
+    ui.dash.classList.toggle('cool', onFoot && (g.player.dashCd ?? 0) > 0);
+    const dashText = t(driving ? 'touch.brake' : 'touch.dash');
+    if (ui.dash.textContent !== dashText) ui.dash.textContent = dashText;
+    // A language switch re-labels the static buttons once. (main.js also
+    // calls relabel() itself; this keeps update() self-sufficient.)
     if (g.lang !== seen.lang) {
       seen.lang = g.lang;
       relabel();
     }
   }
+
   relabel();
   update();
   return { update, relabel };

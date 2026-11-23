@@ -1,8 +1,11 @@
-// Combat: the player's fists and pistol, the bullets they send, and the cash
-// that falls out of beaten rivals. Hits are reported through g.events (crime
-// kinds for the wanted system, sounds for main.js) so this module never talks
-// to the police or the speakers directly. The punch lands a beat after the
-// swing starts, when the strike of the animation lands.
+// Combat: fists, the pistol, the bullets between them, and the money that
+// falls out of beaten men.
+//
+// This module owns the player's violence and nothing else's: outcomes are
+// reported as g.events (crime kinds for the wanted system, sound cues for
+// main.js), so combat never talks to the police or the speakers directly.
+// A punch does its damage a beat after the swing starts — at the moment
+// the rig's strike actually lands — not on the key press.
 import * as THREE from 'three';
 import { MUZZLE_FLASH_TIME, PLAYER } from './config.js';
 import { buildingAt } from './city.js';
@@ -11,23 +14,22 @@ import { damageCar } from './vehicles.js';
 import { basicMat } from './stick3d.js';
 import { makeCashPickup } from './world3d.js';
 
-const bulletGeo = new THREE.BoxGeometry(7, 1.8, 1.8);
-const bulletMat = basicMat(0xffe066);
-// One shared ring and spoke for impact bursts; each burst gets its own
-// material so it can fade without touching anyone else's.
-const impactGeo = new THREE.RingGeometry(2.1, 3.0, 16);
-const sparkGeo = new THREE.BoxGeometry(3.8, 0.75, 1.0);
-
-const SPOKES = 6;
+// Shared geometry: every bullet flies the same small box, and every impact
+// burst is the same ring with the same spokes — only the burst's material
+// is per-burst, because each one fades on its own clock.
+const BULLET_GEO = new THREE.BoxGeometry(7, 1.8, 1.8);
+const BULLET_MAT = basicMat(0xffe066);
+const RING_GEO = new THREE.RingGeometry(2.1, 3.0, 16);
+const SPOKE_GEO = new THREE.BoxGeometry(3.8, 0.75, 1.0);
+const SPOKE_COUNT = 6;
 
 /**
- * A short radial burst at the point of contact: a shockwave disc facing
- * along the blow with six spokes around it. It lives just over a fifth of
- * a second, which is long enough to read as "that connected" at 60 fps and
- * short enough to never pile up in a brawl. Screenshot scenes call this
- * once and never update it, so the still keeps the freeze-frame. `angle`
- * is the direction of the punch, which the disc faces; the camera sits
- * behind the puncher, so it is seen face-on in play.
+ * A radial burst at the point of contact — a shockwave ring facing along
+ * the blow, six spokes around it — that lives 0.22 s: long enough to read
+ * as "that connected", short enough to never pile up in a brawl. The
+ * ?shot= scenes spawn one and never update it, which is what makes their
+ * freeze-frame. `angle` is the punch's direction; the disc faces it, and
+ * the camera behind the puncher sees it face-on.
  */
 export function spawnImpact(g, x, y, angle = 0, height = 24) {
   const mat = new THREE.MeshBasicMaterial({
@@ -35,51 +37,51 @@ export function spawnImpact(g, x, y, angle = 0, height = 24) {
     side: THREE.DoubleSide, depthWrite: false,
   });
   const group = new THREE.Group();
-  const addPart = (mesh) => {
+  const place = (mesh) => {
     mesh.renderOrder = 950;
     group.add(mesh);
     return mesh;
   };
-  addPart(new THREE.Mesh(impactGeo, mat));
-  for (let i = 0; i < SPOKES; i += 1) {
-    const a = (i / SPOKES) * Math.PI * 2 + 0.4;
-    const bar = addPart(new THREE.Mesh(sparkGeo, mat));
-    bar.position.set(Math.cos(a) * 6.8, Math.sin(a) * 6.8, 0);
-    bar.rotation.z = a;
+  place(new THREE.Mesh(RING_GEO, mat));
+  for (let i = 0; i < SPOKE_COUNT; i += 1) {
+    const a = (i / SPOKE_COUNT) * Math.PI * 2 + 0.4;
+    const spoke = place(new THREE.Mesh(SPOKE_GEO, mat));
+    spoke.position.set(Math.cos(a) * 6.8, Math.sin(a) * 6.8, 0);
+    spoke.rotation.z = a;
   }
   group.position.set(x, height, y);
-  group.rotation.y = Math.PI / 2 - angle; // local +z along the blow
+  group.rotation.y = Math.PI / 2 - angle; // the group's +z rides the blow
   g.scene.add(group);
   g.impacts.push({ t: 0, dur: 0.22, group, mat });
 }
 
-/** Advance and retire every live impact burst. */
+/** Grow, lift and fade every live burst; retire the spent ones. */
 export function updateImpacts(g, dt) {
   if (g.impacts.length === 0) return;
-  for (const im of [...g.impacts]) {
-    im.t += dt;
-    const k = im.t / im.dur;
+  for (const burst of [...g.impacts]) {
+    burst.t += dt;
+    const k = burst.t / burst.dur;
     if (k >= 1) {
-      g.scene.remove(im.group);
-      im.mat.dispose();
-      g.impacts.splice(g.impacts.indexOf(im), 1);
+      g.scene.remove(burst.group);
+      burst.mat.dispose();
+      g.impacts.splice(g.impacts.indexOf(burst), 1);
       continue;
     }
-    im.group.scale.setScalar(0.55 + k * 1.9);
-    im.group.position.y += 3 * dt;
-    im.mat.opacity = 0.95 * (1 - k) ** 1.4;
+    burst.group.scale.setScalar(0.55 + k * 1.9);
+    burst.group.position.y += 3 * dt;
+    burst.mat.opacity = 0.95 * (1 - k) ** 1.4;
   }
 }
 
-/** Angle difference wrapped to -PI..PI. */
-function angleDiff(a, b) {
+/** The signed gap between two headings, wrapped into -PI..PI. */
+function headingGap(a, b) {
   let d = a - b;
   while (d > Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
   return d;
 }
 
-/** Spawn a spinning cash pickup (from a beaten rival or a mission bonus). */
+/** Drop a spinning cash pickup (a beaten rival's money, a mission bonus). */
 export function spawnCashPickup(g, x, y, amount) {
   const mesh = makeCashPickup();
   mesh.position.set(x, 0, y);
@@ -88,19 +90,19 @@ export function spawnCashPickup(g, x, y, amount) {
 }
 
 /**
- * The nearest living hostile to a clicked ground point, or null. The
- * search radius grows with the click's range: a figure's body projects
- * past his feet along the view ray, and the overshoot grows with distance
- * (measured: a chest click on a man 180 away lands ~84 past him, a head
- * click ~170), so a fixed radius either misses honest clicks at range or
- * swallows the whole street up close. Only hostiles the player could
- * actually hit count — in front of him, inside bullet range.
+ * The living hostile nearest a clicked ground point, or null. The search
+ * radius grows with the click's distance from the player: a figure's body
+ * projects past his feet along the view ray and the overshoot grows with
+ * range (measured: a chest click on a man 180 away lands ~84 past him, a
+ * head click ~170), so a fixed radius either misses honest clicks at range
+ * or swallows the whole street up close. Only hostiles the player could
+ * actually hit count — in front of him and inside bullet range.
  */
-function nearestHostile(g, x, z) {
+function hostileNear(g, x, z) {
   const p = g.player;
-  const aimDist = Math.hypot(x - p.x, z - p.y);
+  const clickRange = Math.hypot(x - p.x, z - p.y);
   let best = null;
-  let bestD = Math.min(240, 90 + aimDist * 0.35);
+  let bestDist = Math.min(240, 90 + clickRange * 0.35);
   for (const ped of g.peds) {
     if (ped.state === 'down' || ped.state === 'inCar') continue;
     if (ped.role !== 'rival' && ped.role !== 'cop') continue;
@@ -109,37 +111,37 @@ function nearestHostile(g, x, z) {
     if (Math.hypot(rx, ry) > PLAYER.bulletRange + 40) continue;
     if (rx * (x - p.x) + ry * (z - p.y) <= 0) continue; // behind the player
     const d = Math.hypot(ped.x - x, ped.y - z);
-    if (d < bestD) {
-      bestD = d;
+    if (d < bestDist) {
+      bestDist = d;
       best = ped;
     }
   }
   return best;
 }
 
-// --- Muzzle flash -------------------------------------------------------
-// One shared flash, built lazily on the first shot and reused for every
-// shot after: a starburst sprite at the gun tip plus a point light that
-// pulses with it. It lives only while a shot is live (MUZZLE_FLASH_TIME),
-// allocates nothing per shot, and is never created in the deterministic
-// ?shot= scenes — nothing fires there, so the stills stay byte-stable.
-// Player only: NPCs never shoot in Palmera.
+/* --------------------------------------------------------- muzzle flash --
+ * One flash for the whole game, built on the first shot and reused after:
+ * a starburst sprite at the gun tip and a point light that pulses with it.
+ * It exists only while a shot is live (MUZZLE_FLASH_TIME), allocates
+ * nothing per shot, and is never built in the ?shot= scenes — nothing
+ * fires there, so the stills stay byte-stable. Player only: NPCs never
+ * shoot in Palmera. */
 
-// The star's spikes as [angle, length, width], longest along the barrel.
-const MUZZLE_SPIKES = [
+// The star's spikes as [angle, length, width]; the longest rides the barrel.
+const STAR_SPIKES = [
   [0, 62, 9], [Math.PI / 2, 44, 7], [Math.PI, 42, 7], [-Math.PI / 2, 42, 7],
   [Math.PI / 4, 30, 5], [-Math.PI / 4, 30, 5], [3 * Math.PI / 4, 30, 5], [-3 * Math.PI / 4, 30, 5],
 ];
 
-/** The flash's starburst: a hot core with spikes, drawn once. */
-function makeMuzzleTexture() {
+/** Paint the flash's starburst once onto a canvas texture. */
+function paintFlashTexture() {
   const cv = document.createElement('canvas');
   cv.width = 128;
   cv.height = 128;
   const ctx = cv.getContext('2d');
   ctx.translate(64, 64);
   ctx.fillStyle = 'rgba(255,166,60,0.85)';
-  for (const [ang, len, wid] of MUZZLE_SPIKES) {
+  for (const [ang, len, wid] of STAR_SPIKES) {
     ctx.save();
     ctx.rotate(ang);
     ctx.beginPath();
@@ -162,10 +164,10 @@ function makeMuzzleTexture() {
 }
 
 /** Build the shared flash on first use and park it, dark, in the scene. */
-function ensureMuzzle(g) {
+function flashRig(g) {
   if (g.muzzle) return g.muzzle;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: makeMuzzleTexture(), blending: THREE.AdditiveBlending,
+    map: paintFlashTexture(), blending: THREE.AdditiveBlending,
     transparent: true, depthWrite: false, opacity: 0,
   }));
   sprite.scale.set(19, 19, 1);
@@ -181,7 +183,7 @@ function ensureMuzzle(g) {
 }
 
 /** Age the live flash: a fast swell of light, gone inside 60 ms. */
-function updateMuzzle(g, dt) {
+function ageFlash(g, dt) {
   const m = g.muzzle;
   if (!m || m.t <= 0) return;
   m.t -= dt;
@@ -198,12 +200,12 @@ function updateMuzzle(g, dt) {
   m.sprite.scale.set(s, s, 1);
 }
 
-/** Fire one bullet from the player's hand toward the player's facing. */
+/** Send one bullet out of the player's hand along his facing. */
 function fireBullet(g) {
   const p = g.player;
   const cos = Math.cos(p.angle);
   const sin = Math.sin(p.angle);
-  const mesh = new THREE.Mesh(bulletGeo, bulletMat);
+  const mesh = new THREE.Mesh(BULLET_GEO, BULLET_MAT);
   mesh.position.set(p.x + cos * 16, 27, p.y + sin * 16);
   mesh.rotation.y = -p.angle;
   g.scene.add(mesh);
@@ -215,9 +217,9 @@ function fireBullet(g) {
     life: PLAYER.bulletRange / PLAYER.bulletSpeed,
     mesh,
   });
-  // The flash sits just past the bullet's spawn, at the gun tip, and its
-  // star tilts a little differently with every shot.
-  const m = ensureMuzzle(g);
+  // The flash sits just past the bullet's spawn, at the gun tip, its star
+  // tilted a little differently with every shot.
+  const m = flashRig(g);
   m.group.position.set(p.x + cos * 27, 29, p.y + sin * 27);
   m.sprite.material.rotation = (g.time * 13.7) % Math.PI;
   m.t = MUZZLE_FLASH_TIME;
@@ -227,100 +229,96 @@ function fireBullet(g) {
   g.events.push({ type: 'shot' });
 }
 
-/** Where the first connect of a punch reads: point, facing and height. */
-function newHitMark(angle) {
-  return { marked: false, x: 0, y: 0, angle, height: 30, downed: false };
-}
-
-function markHit(mark, x, y, angle, height) {
-  if (mark.marked) return;
-  mark.marked = true;
-  mark.x = x;
-  mark.y = y;
-  mark.angle = angle;
-  if (height !== undefined) mark.height = height;
-}
-
-/** Resolve the strike of a punch: whoever is in front of the player takes it. */
+/**
+ * Resolve the strike of a punch. The FIRST connect of the swing is what
+ * the impact burst and the camera shake read (tracked in `mark`); every
+ * man and car in the arc still takes the blow itself.
+ */
 function landPunch(g) {
   const p = g.player;
-  const mark = newHitMark(p.angle);
+  const mark = { marked: false, x: 0, y: 0, angle: p.angle, height: 30, downed: false };
+  const noteHit = (x, y, angle, height) => {
+    if (mark.marked) return;
+    mark.marked = true;
+    mark.x = x;
+    mark.y = y;
+    mark.angle = angle;
+    if (height !== undefined) mark.height = height;
+  };
   for (const ped of g.peds) {
     if (ped.state === 'down' || ped.state === 'inCar') continue;
     const d = Math.hypot(ped.x - p.x, ped.y - p.y);
     if (d > PLAYER.punchRange + 8) continue;
     const dir = Math.atan2(ped.y - p.y, ped.x - p.x);
-    if (Math.abs(angleDiff(dir, p.angle)) > 1.15) continue;
+    if (Math.abs(headingGap(dir, p.angle)) > 1.15) continue;
     hurtPed(g, ped, p.punchDamage ?? PLAYER.punchDamage);
     if (ped.state === 'down') mark.downed = true;
     ped.x += Math.cos(dir) * 9;
     ped.y += Math.sin(dir) * 9;
-    // The shove stops at walls: a man punched down with his back to a
-    // facade used to land inside it and lie there for the whole down
-    // time — the knockback is a displacement like any other and resolves
-    // against the buildings near him.
+    // The shove stops at walls. A man knocked down with his back to a
+    // facade used to end up inside it for the whole down time; the
+    // knockback is a displacement like any other and resolves against
+    // the buildings around him.
     resolvePedCollision(g, ped);
-    markHit(mark, ped.x, ped.y, dir);
+    noteHit(ped.x, ped.y, dir);
     g.events.push({ type: 'crime', kind: ped.role === 'cop' ? 'punchCop' : 'punchPed', x: ped.x, y: ped.y });
   }
   for (const car of g.cars) {
     if (car === p.car) continue;
-    const d = Math.hypot(car.x - p.x, car.y - p.y);
-    if (d > 44) continue;
-    // Through damageCar, never a direct hp write: a car beaten to zero
-    // by fists must actually wreck (sink, tilt, refuse entry) like any
-    // other dead car. The direct write this replaces left "zombie" cars
-    // at hp <= 0 still upright, enterable and drivable, and made traffic
-    // cars unkillable by fists and bullets.
+    if (Math.hypot(car.x - p.x, car.y - p.y) > 44) continue;
+    // Through damageCar, never a bare hp write: a car beaten to zero by
+    // fists has to wreck (sink, tilt, refuse entry) like any other dead
+    // car. The direct write this replaced left zombie cars at hp <= 0 —
+    // upright, enterable, drivable — and made traffic cars unkillable
+    // by fists and bullets alike.
     damageCar(g, car, 8);
-    markHit(mark, car.x, car.y, p.angle, 16); // a car hit reads at bonnet height
+    noteHit(car.x, car.y, p.angle, 16); // a car connect reads at bonnet height
     g.events.push({ type: 'crime', kind: 'hitCar', x: car.x, y: car.y });
   }
   if (mark.marked) {
     spawnImpact(g, mark.x, mark.y, mark.angle, mark.height);
-    // A punch that lands reads through the camera as well as the arm.
+    // A connect reads through the camera as well as through the arm.
     g.shake = Math.max(g.shake, 2.8);
-    // Only a connect is an event now: the swing sound moved to punch
-    // initiation ('punchswing'), so a miss needs no landing event at all.
+    // Only a connect is an event: the whoosh moved to the swing itself
+    // ('punchswing'), so a miss needs no landing event at all.
     g.events.push({ type: 'punchhit', down: mark.downed });
   }
 }
 
-/** Face the shot: a clicked hostile if there is one, else the aim state. */
-function faceShot(g) {
+/** Aim the shot: a clicked hostile if one is there, else the aim state. */
+function settleAim(g) {
   const p = g.player;
-  const foe = g.aimPoint ? nearestHostile(g, g.aimPoint.x, g.aimPoint.z) : null;
+  const foe = g.aimPoint ? hostileNear(g, g.aimPoint.x, g.aimPoint.z) : null;
   if (foe) p.angle = Math.atan2(foe.y - p.y, foe.x - p.x);
   else if (g.aimAngle !== null) p.angle = g.aimAngle;
 }
 
-/** The player's attacks for one frame: punch taps, held gunfire, landing strikes. */
+/** The player's attacks for one frame: swings, held fire, landing strikes. */
 export function updateCombat(g, dt) {
   const p = g.player;
   updateImpacts(g, dt);
-  updateMuzzle(g, dt);
+  ageFlash(g, dt);
   p.punchCd = Math.max(0, p.punchCd - dt);
   p.shotCd = Math.max(0, p.shotCd - dt);
   if (p.punchHitT > 0) {
     p.punchHitT -= dt;
     if (p.punchHitT <= 0) landPunch(g);
   }
-  // The aim state is a rig target, and it has to settle in every state: it
-  // used to stop being written the moment he sat in a car, so a shot fired
-  // while running for the door left the driving arm raised for the whole
-  // trip.
+  // The aim flag is a rig target and must settle in EVERY state: it used
+  // to stop being written the moment he sat in a car, so a shot fired
+  // while running for the door left the driving arm raised all trip.
   p.fig.target.aim = p.aimT > 0 ? 1 : 0;
   if (p.aimT > 0) p.aimT -= dt;
   if (p.state !== 'foot' || g.transition) return;
   if (g.input.tapped('KeyF', 'KeyJ') && p.punchCd <= 0) {
     p.punchCd = PLAYER.punchCooldown;
     // The whoosh belongs to the SWING, not the landing: it fires here, at
-    // initiation, for every punch the player throws — hit or miss. (It
-    // used to hang off the landing 'punchmiss' event, so a punch that
-    // connected never whooshed at all and a miss whooshed 0.2 s late.)
+    // initiation, for every punch thrown — hit or miss. (It used to hang
+    // off the landing 'punchmiss' event, so connects never whooshed and
+    // misses whooshed 0.2 s late.)
     g.events.push({ type: 'punchswing' });
-    // The rig's strike reaches full extension 46% into its 0.44 s punch:
-    // this is when the fist actually arrives, so the damage waits for it.
+    // The rig's strike reaches full extension 46% into its 0.44 s punch;
+    // that is when the fist arrives, so the damage waits for it.
     p.punchHitT = 0.2;
     p.fig.triggerPunch();
     p.fig.setExpression('angry');
@@ -331,15 +329,13 @@ export function updateCombat(g, dt) {
     p.shotCd = PLAYER.shotCooldown;
     p.aimT = 0.4;
     if (g.input.mouse.down) {
-      // Click-to-face: if an enemy stands at (or near) the clicked point,
-      // face HIM, not the bare ground point. A click lands on a figure's
-      // body, whose ground projection falls a good way past his feet, so
-      // aiming at the point itself walks shots past the man the player
-      // clicked on. The snap happens on this very press, before the
-      // bullet spawns, so the shot goes at the enemy — never a beat late.
-      // Hostiles are the game's own fighters (rivals and officers); a
-      // click on empty ground keeps the plain ground-point aim, untouched.
-      faceShot(g);
+      // Click-to-face, settled on this very press, before the bullet
+      // spawns: if an enemy stands at (or near) the clicked point, face
+      // HIM. A click lands on a figure's body, whose ground projection
+      // falls a good way past his feet, so aiming at the bare point
+      // walks shots past the man the player clicked on. A click on empty
+      // ground keeps the plain ground-point aim, untouched.
+      settleAim(g);
     }
     fireBullet(g);
     p.fig.setExpression('shout');
@@ -347,8 +343,8 @@ export function updateCombat(g, dt) {
   }
 }
 
-/** Test one bullet against people, then cars: true when it dies on either. */
-function bulletStrikes(g, bullet) {
+/** One bullet against people, then cars: true when it dies on either. */
+function bulletConnects(g, bullet) {
   for (const ped of g.peds) {
     if (ped.state === 'down' || ped.state === 'inCar') continue;
     if (Math.hypot(ped.x - bullet.x, ped.y - bullet.y) < 15) {
@@ -359,8 +355,8 @@ function bulletStrikes(g, bullet) {
   }
   for (const car of g.cars) {
     if (Math.hypot(car.x - bullet.x, car.y - bullet.y) < 27) {
-      // Same rule as fists: damageCar owns the wreck crossing, so a
-      // shot-out car (even the player's own) dies properly.
+      // The same rule as fists: damageCar owns the wreck crossing, so a
+      // shot-out car — even the player's own — dies properly.
       damageCar(g, car, 12);
       g.events.push({ type: 'spark', x: bullet.x, y: bullet.y });
       return true;
@@ -369,7 +365,7 @@ function bulletStrikes(g, bullet) {
   return false;
 }
 
-/** Move every bullet, test it against buildings, people and cars. */
+/** Advance every bullet; buildings, bodies and cars all stop one. */
 export function updateBullets(g, dt) {
   if (g.bullets.length === 0) return;
   for (const bullet of [...g.bullets]) {
@@ -379,7 +375,7 @@ export function updateBullets(g, dt) {
     bullet.mesh.position.set(bullet.x, 27, bullet.y);
     let dead = bullet.life <= 0;
     if (!dead && buildingAt(g.city, bullet.x, bullet.y)) dead = true;
-    if (!dead) dead = bulletStrikes(g, bullet);
+    if (!dead) dead = bulletConnects(g, bullet);
     if (dead) {
       g.scene.remove(bullet.mesh);
       g.bullets.splice(g.bullets.indexOf(bullet), 1);
@@ -387,7 +383,7 @@ export function updateBullets(g, dt) {
   }
 }
 
-/** Spin the cash pickups and collect the ones the player walks over (or drives over). */
+/** Spin the cash pickups; collect the ones the player reaches, foot or car. */
 export function updatePickups(g, dt, time) {
   const p = g.player;
   if (g.pickups.length === 0) return;
