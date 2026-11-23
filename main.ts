@@ -1,17 +1,17 @@
-// main.ts — the gta6-01 hand-in program for THE STICK MAN.
+// main.ts — the make.fun hand-in program for THE STICK MAN (gta6-01).
 //
-// Runs as-is under Node 22 (`node main.ts`): standard library only,
-// erasable TypeScript, no build step. The entry being handed in is the
-// game/ tree beside this file — plain static files a desktop browser
-// loads offline (game/index.html, its ES modules, a vendored Three.js;
-// nothing is fetched at runtime). This program copies that tree and the
-// screenshots/ set into the output directory and writes dossier.json,
-// the summary the judge reads. The dossier is produced by make.fun's own
-// vendored builder, so what is scored on the far side is byte-for-byte
-// the summary this program prints here.
+// What is being handed in is the game/ tree beside this file: a static
+// browser game (an index page, its ES modules and a vendored Three.js)
+// that loads fully offline. This program's whole job is to stage that
+// tree, plus the screenshots/ set, into the output directory and then
+// write dossier.json — the summary the judge reads — using make.fun's
+// own vendored builder, so the dossier scored on the far side is
+// byte-for-byte the one this program produces here.
 //
-// Output directory: MAKEFUN_OUTPUT_DIR when set, /output otherwise.
-// Local play instead: `node serve.ts`, then open http://localhost:8080.
+// Node 22, standard library only, erasable TypeScript: it runs as-is
+// with `node main.ts`, no build step. The output directory is
+// MAKEFUN_OUTPUT_DIR when set and /output otherwise. To play the game
+// locally instead, run `node serve.ts` and open http://localhost:8080.
 
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -19,35 +19,46 @@ import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
 /** The entry's name, stamped into the run log so a hand-in names what it ships. */
-const ENTRY_NAME = 'THE STICK MAN';
+const TITLE = 'THE STICK MAN';
 
-// The scorer's caps, mirrored so this program refuses a tree the scorer
-// would refuse anyway: at most 4 screenshots of at most 256 KiB each, at
-// most 993 files and 48 MiB under game/, no game path over 1000 bytes.
-// Of these, only the text cap shapes the dossier's bytes.
-const CAPS = {
-  text_max_bytes: 163840,
-  screenshots: { max: 4, max_bytes: 262144 },
+/**
+ * The scorer's caps, restated so the dossier is built under the same
+ * limits the far side enforces: at most 4 screenshots of at most
+ * 256 KiB each, at most 993 files and 48 MiB under game/, no game path
+ * over 1000 bytes, and dossier text excerpts capped at 160 KiB. Of
+ * these, only the text cap shapes the dossier's bytes.
+ */
+const LIMITS = {
+  text_max_bytes: 160 * 1024,
+  screenshots: { max: 4, max_bytes: 256 * 1024 },
   game_max_files: 993,
-  game_max_bytes: 50331648,
+  game_max_bytes: 48 * 1024 * 1024,
   game_path_max_bytes: 1000,
 };
 
-/** This file's own directory: game/ and screenshots/ live beside it. */
-function entryDir(): string {
+/** The trees that make up the entry, staged in this order. */
+const TREES = ['game', 'screenshots'];
+
+/** The directory this file lives in; both entry trees sit beside it. */
+function homeDir(): string {
   return dirname(fileURLToPath(import.meta.url));
 }
 
-/** Copy one entry tree (game/, screenshots/) into the output directory. */
-function copyTree(from: string, to: string): void {
+/**
+ * Stage one entry tree into the output directory. The destination is
+ * created first, so a tree missing on the source side still leaves an
+ * (empty) directory behind rather than failing the hand-in.
+ */
+function stageTree(name: string, outDir: string): void {
+  const from = join(homeDir(), name);
+  const to = join(outDir, name);
   mkdirSync(to, { recursive: true });
   if (existsSync(from)) cpSync(from, to, { recursive: true });
 }
 
 const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
-console.log(`Staging ${ENTRY_NAME} into ${outDir}: game/ + screenshots/, then dossier.json`);
+console.log(`Staging ${TITLE} into ${outDir}: game/ + screenshots/, then dossier.json`);
 mkdirSync(outDir, { recursive: true });
-copyTree(join(entryDir(), 'game'), join(outDir, 'game'));
-copyTree(join(entryDir(), 'screenshots'), join(outDir, 'screenshots'));
-writeFileSync(join(outDir, 'dossier.json'), buildDossier(outDir, CAPS));
+for (const name of TREES) stageTree(name, outDir);
+writeFileSync(join(outDir, 'dossier.json'), buildDossier(outDir, LIMITS));
 console.log('Hand-in complete.');
