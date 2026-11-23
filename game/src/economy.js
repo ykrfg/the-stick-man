@@ -13,7 +13,7 @@ import {
 } from './config.js';
 import { getLang, t } from './i18n.js';
 import { jobAvailable, missionAvailable } from './missions.js';
-import { applyCarSpec, recolorCar, removeCar, setCarNeon, spawnCar } from './vehicles.js';
+import { applyCarSpec, recolorCar, removeCar, setCarNeon, spawnCar, syncCarMesh } from './vehicles.js';
 
 let g = null;
 let tray = null;
@@ -915,6 +915,9 @@ function updateSummon(dt) {
       car.summonBest = undefined;
       car.summonStall = 0;
       car.speed = 0;
+      // The arrival frame syncs too: the mesh must end exactly where
+      // the logic says the car stopped (round #31).
+      syncCarMesh(car, 0);
       continue;
     }
     const step = Math.min(d, 300 * dt);
@@ -922,6 +925,13 @@ function updateSummon(dt) {
     car.y += (dy / d) * step;
     car.angle = Math.atan2(dy, dx);
     car.speed = 300;
+    // A summoned car is parked-kind: nothing else syncs its mesh per
+    // frame (updateTraffic is traffic-only, moveFreeCar is driven
+    // cars), so moving x/y/angle here without a sync left the visible
+    // car standing at the spawn point while its logical self rolled
+    // to the kerb — the minimap dot and the enter prompt arrived, the
+    // car did not (round #31). Sync every frame it moves.
+    syncCarMesh(car, dt);
   }
 }
 
@@ -997,6 +1007,13 @@ function recoverWrecked() {
   car.hp = car.maxHp ?? 100;
   car.burnT = 0;
   car.speed = 0;
+  // Stand the mesh back up NOW (round #31): the wreck pose (sunk,
+  // tilted) was written by syncCarMesh when the car died, and an owned
+  // wreck never sinks, so updateWrecks' sink-undo branch never fires
+  // for it — without this sync the car sat sunken and tilted, whole on
+  // paper and dead to look at, until somebody drove or shoved it. The
+  // fire FX still goes out on the next updateWrecks pass, as before.
+  syncCarMesh(car, 0);
   g.say(t('banner.recovered.title'), t('banner.recovered.sub'), 3);
   g.sfx.confirm();
   g.persist?.();
