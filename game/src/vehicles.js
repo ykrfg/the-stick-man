@@ -1,8 +1,10 @@
-// Cars: chunky toon cars built from boxes and cylinders, with an inverted-hull
-// outline, glass you can see the driver through, and spinning wheels. This module
-// owns the car entities and their movement: traffic cars that follow the road
-// network lane by lane, the player's arcade driving, and the shared collision
-// resolution (buildings, other cars, pedestrians) that police cars reuse.
+// Vehicles: the toon cars of Palmera and everything that moves them.
+// A car here is a plain record — where it is, how fast, how beaten up —
+// plus a box-and-cylinder mesh with an inverted-hull outline and glass
+// the driver shows through. This module builds both halves, then runs
+// them: lane-following traffic, the player's arcade driving, the courier
+// on its ring, and the one collision resolution (buildings, cars, people)
+// that the police cars borrow from moveFreeCar.
 import * as THREE from 'three';
 import { CAR, COURIER_HP, CRASH_DAMAGE, CRASH_GRACE, DRIVEN_CRASH_TAKEN, MOTORS, NEON, PLAYER, ROAD, TRAFFIC_WARN, TRAFFIC_YIELD, WORLD, WRECK_BURN } from './config.js';
 import { clampToWorld, resolveCircleCollision } from './city.js';
@@ -11,17 +13,33 @@ import { makeGlowSprite, nightLevel } from './gfx.js';
 
 export const CAR_COLORS = [0xef6461, 0xffd166, 0x7fb5d5, 0xa8d08d, 0xf4a7c3, 0xff8a5c, 0x95d5b2, 0xf6bd60, 0xc77dff, 0xeeeeee];
 
-const wheelGeo = new THREE.CylinderGeometry(5.6, 5.6, 4.2, 12);
-wheelGeo.rotateX(Math.PI / 2);
-const bodyGeo = new THREE.BoxGeometry(CAR.length, 10, CAR.width);
-const cabinGeo = new THREE.BoxGeometry(24, 8.5, 20.5);
-// Shared sub-parts: every car uses the same light, stripe, bar and bulb
-// shapes and the same glass. They were rebuilt per car.
-const lightGeo = new THREE.BoxGeometry(3.2, 1.6, 5.5);
-const stripeGeo = new THREE.BoxGeometry(CAR.length + 0.6, 3.6, CAR.width + 0.6);
-const barGeo = new THREE.BoxGeometry(13, 2.6, 9);
-const bulbGeo = new THREE.SphereGeometry(2.9, 10, 8);
-const glassMat = new THREE.MeshToonMaterial({ color: 0x9fd4e8, transparent: true, opacity: 0.5 });
+/* ------------------------------------------------------------ shared kit */
+// Every car is assembled from the same shapes: one wheel, one body, one
+// cabin, one lamp, and — for the patrol cars — one stripe, bar and bulb.
+// They are built once here instead of per car, and the cabin glass is a
+// single shared material.
+function buildSharedKit() {
+  const wheel = new THREE.CylinderGeometry(5.6, 5.6, 4.2, 12);
+  wheel.rotateX(Math.PI / 2);
+  return {
+    wheel,
+    body: new THREE.BoxGeometry(CAR.length, 10, CAR.width),
+    cabin: new THREE.BoxGeometry(24, 8.5, 20.5),
+    lamp: new THREE.BoxGeometry(3.2, 1.6, 5.5),
+    stripe: new THREE.BoxGeometry(CAR.length + 0.6, 3.6, CAR.width + 0.6),
+    bar: new THREE.BoxGeometry(13, 2.6, 9),
+    bulb: new THREE.SphereGeometry(2.9, 10, 8),
+    glass: new THREE.MeshToonMaterial({ color: 0x9fd4e8, transparent: true, opacity: 0.5 }),
+  };
+}
+const KIT = buildSharedKit();
+const INK = 0x17181c;
+const WHEEL_SPOTS = [[16, 12.6], [16, -12.6], [-16, 12.6], [-16, -12.6]];
+
+function place(mesh, x, y, z) {
+  mesh.position.set(x, y, z);
+  return mesh;
+}
 
 /** Build the mesh for one car. Police cars get a stripe and a flashing light bar. */
 export function makeCarMesh(colorHex, police = false) {
@@ -30,111 +48,94 @@ export function makeCarMesh(colorHex, police = false) {
   // rotation.x with the body roll). Without this order a roll would tip
   // the car about a world axis instead of its own.
   group.rotation.order = 'YXZ';
-  const body = new THREE.Mesh(bodyGeo, toonMat(police ? 0xf4f4f4 : colorHex));
-  body.position.y = 8.5;
-  const hull = new THREE.Mesh(bodyGeo, basicMat(0x17181c));
-  hull.material = basicMat(0x17181c);
+  const body = place(new THREE.Mesh(KIT.body, toonMat(police ? 0xf4f4f4 : colorHex)), 0, 8.5, 0);
+  const hull = new THREE.Mesh(KIT.body, basicMat(INK));
   hull.scale.set(1.045, 1.1, 1.06);
   hull.material.side = THREE.BackSide;
   body.add(hull);
   group.add(body);
-  if (police) {
-    const stripe = new THREE.Mesh(stripeGeo, basicMat(0x23232b));
-    stripe.position.y = 7.2;
-    group.add(stripe);
-  }
-  const cabin = new THREE.Mesh(cabinGeo, glassMat);
-  cabin.position.set(-2, 16, 0);
-  group.add(cabin);
-  const wheels = [];
-  for (const [wx, wz] of [[16, 12.6], [16, -12.6], [-16, 12.6], [-16, -12.6]]) {
-    const wheel = new THREE.Mesh(wheelGeo, basicMat(0x1c1c22));
-    wheel.position.set(wx, 5.6, wz);
+  if (police) group.add(place(new THREE.Mesh(KIT.stripe, basicMat(0x23232b)), 0, 7.2, 0));
+  group.add(place(new THREE.Mesh(KIT.cabin, KIT.glass), -2, 16, 0));
+  const wheels = WHEEL_SPOTS.map(([wx, wz]) => {
+    const wheel = place(new THREE.Mesh(KIT.wheel, basicMat(0x1c1c22)), wx, 5.6, wz);
     group.add(wheel);
-    wheels.push(wheel);
-  }
-  const headL = new THREE.Mesh(lightGeo, basicMat(0xfff3a0));
-  headL.position.set(24.2, 8.5, 7.5);
-  const headR = headL.clone();
-  headR.position.z = -7.5;
-  const tailL = new THREE.Mesh(lightGeo, basicMat(0xe33f2f));
-  tailL.position.set(-24.2, 8.5, 7.5);
-  const tailR = tailL.clone();
-  tailR.position.z = -7.5;
-  group.add(headL, headR, tailL, tailR);
+    return wheel;
+  });
+  const lamp = (hex, x, z) => place(new THREE.Mesh(KIT.lamp, basicMat(hex)), x, 8.5, z);
+  group.add(lamp(0xfff3a0, 24.2, 7.5), lamp(0xfff3a0, 24.2, -7.5));
+  group.add(lamp(0xe33f2f, -24.2, 7.5), lamp(0xe33f2f, -24.2, -7.5));
   // A soft bloom on the nose: headlights are what reads on a night street.
-  const beam = makeGlowSprite(72, 0xffe6a8);
-  beam.position.set(30, 10, 0);
+  const beam = place(makeGlowSprite(72, 0xffe6a8), 30, 10, 0);
   group.add(beam);
   let lightL = null;
   let lightR = null;
   let glowL = null;
   let glowR = null;
   if (police) {
-    const bar = new THREE.Mesh(barGeo, basicMat(0x23232b));
-    bar.position.set(-2, 21.2, 0); // sunk into the cabin roof, not resting exactly on it
-    group.add(bar);
-    lightL = new THREE.Mesh(bulbGeo, basicMat(0xff3b30));
-    lightL.position.set(-2, 24.4, 3.2);
-    lightR = new THREE.Mesh(bulbGeo, basicMat(0x2f7bff));
-    lightR.position.set(-2, 24.4, -3.2);
+    group.add(place(new THREE.Mesh(KIT.bar, basicMat(0x23232b)), -2, 21.2, 0)); // sunk into the cabin roof, not resting exactly on it
+    lightL = place(new THREE.Mesh(KIT.bulb, basicMat(0xff3b30)), -2, 24.4, 3.2);
+    lightR = place(new THREE.Mesh(KIT.bulb, basicMat(0x2f7bff)), -2, 24.4, -3.2);
     group.add(lightL, lightR);
     // The bar itself blooms red and blue, and the two alternate.
-    glowL = makeGlowSprite(64, 0xff3b30);
-    glowL.position.set(-2, 24.4, 3.2);
-    glowR = makeGlowSprite(64, 0x2f7bff);
-    glowR.position.set(-2, 24.4, -3.2);
+    glowL = place(makeGlowSprite(64, 0xff3b30), -2, 24.4, 3.2);
+    glowR = place(makeGlowSprite(64, 0x2f7bff), -2, 24.4, -3.2);
     group.add(glowL, glowR);
   }
   return { group, wheels, lightL, lightR, beam, glowL, glowR };
 }
 
-function baseCar(kind, x, y, angle, colorHex) {
-  const mesh = makeCarMesh(colorHex, kind === 'police');
+/* ------------------------------------------------------------- car record */
+// A fresh car's full state, in one place: motion, damage, the wreck
+// afterlife, the crash-encounter record, the driving-feel pair, and the
+// fleet fields (traffic lanes, police) that only some kinds ever use.
+function freshCar(kind, x, y, angle, colorHex) {
+  const parts = makeCarMesh(colorHex, kind === 'police');
   return {
     kind,
     x, y, angle,
     speed: 0,
     color: colorHex,
-    mesh: mesh.group,
-    wheels: mesh.wheels,
-    lightL: mesh.lightL,
-    lightR: mesh.lightR,
-    beam: mesh.beam,
-    glowL: mesh.glowL,
-    glowR: mesh.glowR,
+    mesh: parts.group,
+    wheels: parts.wheels,
+    lightL: parts.lightL,
+    lightR: parts.lightR,
+    beam: parts.beam,
+    glowL: parts.glowL,
+    glowR: parts.glowR,
     sirenT: 0,
     occupant: null, // 'player', a ped object, or null
     hp: 100,
-    // Knock velocity from a hard car-to-car hit (see collideCars): a free
-    // car struck at speed is shoved sideways and the shove decays over a
-    // few frames. Parked cars have no update loop to carry one, so they
-    // take their knock as immediate displacement instead.
+    // Knock velocity from a hard car-to-car hit (see resolveCarContact):
+    // a free car struck at speed is shoved sideways and the shove decays
+    // over a few frames. Parked cars have no update loop to carry one,
+    // so they take their knock as immediate displacement instead.
     shoveX: 0,
     shoveY: 0,
-    // Player ownership: once the player takes a car it is theirs — the fleet
-    // systems (traffic lane-following/despawn, police chase/drive-off) must
-    // never touch it again. `wrecked` is the terminal state of a car beaten
-    // to hp <= 0 while the player drove it: it never moves again.
+    // Player ownership: once the player takes a car it is theirs — the
+    // fleet systems (traffic lane-following/despawn, police chase and
+    // drive-off) must never touch it again. `wrecked` is the terminal
+    // state of a car beaten to hp <= 0 while the player drove it: it
+    // never moves again.
     touched: false,
     wrecked: false,
     // Wreck afterlife (updateWrecks): seconds spent burning, the fire
     // effect group while it burns, and how far the dead car has sunk
-    // while it fades away. None of it is saved — wrecks are world state,
-    // never progress.
+    // while it fades away. None of it is saved — wrecks are world
+    // state, never progress.
     burnT: 0,
     fireFx: null,
     sinkY: 0,
-    // Crash-encounter record (player's car only, written by moveFreeCar):
-    // the partner whose crash impact last damaged this car, and the
-    // window during which that same partner cannot damage it again.
-    // The record clears early once the pair has properly parted (see
-    // the top of moveFreeCar), so a genuinely new encounter counts.
+    // Crash-encounter record (the player's car only, written by
+    // moveFreeCar): the partner whose crash impact last damaged this
+    // car, and the window during which that same partner cannot damage
+    // it again. The record clears early once the pair has properly
+    // parted (see the top of moveFreeCar), so a genuinely new encounter
+    // counts.
     crashPartner: null,
     crashPartnerUntil: 0,
-    // Driving feel only (the player's car): body roll into a corner, and
-    // the handbrake's slide — the angle by which the car's travel lags
-    // its nose. Both settle back to 0 on their own.
+    // Driving feel only (the player's car): body roll into a corner,
+    // and the handbrake's slide — the angle by which the car's travel
+    // lags its nose. Both settle back to 0 on their own.
     lean: 0,
     drift: 0,
     skidT: 0,
@@ -146,19 +147,22 @@ function baseCar(kind, x, y, angle, colorHex) {
   };
 }
 
+const finiteOr = (value, fallback) => (Number.isFinite(value) ? value : fallback);
+
 /** Place the car's mesh from its logical (x, y, angle) and spin its wheels. */
 export function syncCarMesh(car, dt) {
-  // Sanitize first: one bad frame (a NaN slipped into the physics) must never
-  // leave a car permanently invisible — a non-finite transform renders as
-  // nothing at all, which reads to the player as "my car vanished".
+  // Sanitize first: one bad frame (a NaN slipped into the physics) must
+  // never leave a car permanently invisible — a non-finite transform
+  // renders as nothing at all, which reads to the player as "my car
+  // vanished".
   if (!Number.isFinite(car.x) || !Number.isFinite(car.y)) {
     car.x = 1600;
     car.y = 1260;
   }
-  if (!Number.isFinite(car.angle)) car.angle = 0;
-  if (!Number.isFinite(car.speed)) car.speed = 0;
-  if (!Number.isFinite(car.lean)) car.lean = 0;
-  if (!Number.isFinite(car.drift)) car.drift = 0;
+  car.angle = finiteOr(car.angle, 0);
+  car.speed = finiteOr(car.speed, 0);
+  car.lean = finiteOr(car.lean, 0);
+  car.drift = finiteOr(car.drift, 0);
   // A wreck sits low and tilted, so it reads as a dead car, not a good
   // one — and lower still while it sinks away at the end of its burn
   // (sinkY is updateWrecks' doing; every sync path honours it).
@@ -185,6 +189,14 @@ export function syncCarMesh(car, dt) {
   for (const wheel of car.wheels) wheel.rotation.z = -car.wheelSpin;
 }
 
+/** Enter a finished car into the world: listed, meshed, synced. */
+function placeInWorld(g, car) {
+  g.cars.push(car);
+  g.scene.add(car.mesh);
+  syncCarMesh(car, 0);
+  return car;
+}
+
 /** Scatter parked cars along the curbs, clear of intersections and doorways. */
 export function spawnParkedCars(g) {
   const rng = g.rng;
@@ -196,14 +208,12 @@ export function spawnParkedCars(g) {
     if (ROAD.streets.some((s) => Math.abs(y - s) < 95)) continue;
     if (Math.hypot(x - g.player.x, y - g.player.y) < 130) continue;
     if (g.cars.some((c) => Math.hypot(c.x - x, c.y - y) < 70)) continue;
-    const dir = side > 0 ? 1 : -1; // parked facing the traffic direction of their side
-    const car = baseCar('parked', x, y, dir > 0 ? Math.PI / 2 : -Math.PI / 2, rng.pick(CAR_COLORS));
+    // Parked facing the traffic direction of their side of the road.
+    const car = freshCar('parked', x, y, side > 0 ? Math.PI / 2 : -Math.PI / 2, rng.pick(CAR_COLORS));
     car.axis = 'y';
     car.road = avenue;
-    car.dir = dir;
-    g.cars.push(car);
-    g.scene.add(car.mesh);
-    syncCarMesh(car, 0);
+    car.dir = side;
+    placeInWorld(g, car);
   }
 }
 
@@ -226,37 +236,26 @@ export function spawnTrafficCar(g) {
     // at the edge of the frame.
     if (Math.abs(dxp) < 700 && Math.abs(dyp) < 460) continue;
     if (g.cars.some((c) => Math.hypot(c.x - x, c.y - y) < 80)) continue;
-    const car = baseCar('traffic', x, y, 0, rng.pick(CAR_COLORS));
+    const car = freshCar('traffic', x, y, 0, rng.pick(CAR_COLORS));
     car.axis = onAvenue ? 'y' : 'x';
     car.road = road;
     car.dir = dir;
     car.lane = lane;
     car.angle = car.axis === 'y' ? (dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (dir > 0 ? 0 : Math.PI);
     car.speed = CAR.trafficSpeed * rng.range(0.8, 1.05);
-    g.cars.push(car);
-    g.scene.add(car.mesh);
-    syncCarMesh(car, 0);
-    return car;
+    return placeInWorld(g, car);
   }
   return null;
 }
 
 /** Create a plain car of any kind at an exact spot (used by the screenshot scenes). */
 export function spawnCar(g, kind, x, y, angle, colorHex) {
-  const car = baseCar(kind, x, y, angle, colorHex);
-  g.cars.push(car);
-  g.scene.add(car.mesh);
-  syncCarMesh(car, 0);
-  return car;
+  return placeInWorld(g, freshCar(kind, x, y, angle, colorHex));
 }
 
 /** Create a police car (used by police.js) at a road point. */
 export function spawnPoliceCar(g, x, y) {
-  const car = baseCar('police', x, y, 0, 0xf4f4f4);
-  g.cars.push(car);
-  g.scene.add(car.mesh);
-  syncCarMesh(car, 0);
-  return car;
+  return placeInWorld(g, freshCar('police', x, y, 0, 0xf4f4f4));
 }
 
 /** Remove a car from the world entirely (despawned police, wrecked traffic). */
@@ -278,7 +277,7 @@ export function removeCar(g, car) {
  * can also accept a good pin as a stop.
  */
 export function spawnCourierCar(g) {
-  const car = baseCar('courier', 694, 720, 0, 0x39424e);
+  const car = freshCar('courier', 694, 720, 0, 0x39424e);
   car.hp = COURIER_HP;
   car.wps = [
     { x: 2480, y: 720 },
@@ -289,10 +288,15 @@ export function spawnCourierCar(g) {
   car.wp = 0;
   car.stillT = 0;
   car.speed = 200;
-  g.cars.push(car);
-  g.scene.add(car.mesh);
-  syncCarMesh(car, 0);
-  return car;
+  return placeInWorld(g, car);
+}
+
+/** Turn a car toward a heading, at most `rate` radians per second of it. */
+function steerToward(car, desired, rate, dt) {
+  let diff = desired - car.angle;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  car.angle += Math.max(-rate * dt, Math.min(rate * dt, diff));
 }
 
 /**
@@ -310,14 +314,8 @@ export function driveCourier(g, car, dt) {
   }
   const wp = car.wps[car.wp ?? 0];
   if (wp) {
-    const dx = wp.x - car.x;
-    const dy = wp.y - car.y;
-    if (Math.hypot(dx, dy) < 85) car.wp = ((car.wp ?? 0) + 1) % car.wps.length;
-    const desired = Math.atan2(dy, dx);
-    let diff = desired - car.angle;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    car.angle += Math.max(-2.0 * dt, Math.min(2.0 * dt, diff));
+    if (Math.hypot(wp.x - car.x, wp.y - car.y) < 85) car.wp = ((car.wp ?? 0) + 1) % car.wps.length;
+    steerToward(car, Math.atan2(wp.y - car.y, wp.x - car.x), 2.0, dt);
   }
   const p = g.player;
   const fleeing = p.state === 'car' && Math.hypot(p.x - car.x, p.y - car.y) < 360;
@@ -327,21 +325,23 @@ export function driveCourier(g, car, dt) {
   car.stillT = Math.abs(car.speed) < 25 ? (car.stillT ?? 0) + dt : 0;
 }
 
+/* ------------------------------------------------------------ knock & wreck */
+
 /**
- * A shoved car must stay consistent: kept inside the world, resolved out
- * of any building it was pushed into, and with its mesh where its body
- * actually is. Parked cars otherwise never re-sync after spawn, so a
- * pushed one used to leave its visible mesh behind at the old spot while
- * the real car sat somewhere else, invisible.
+ * A shoved car must stay consistent: kept inside the world, resolved
+ * out of any building it was pushed into, and with its mesh where its
+ * body actually is. Parked cars otherwise never re-sync after spawn,
+ * so a pushed one used to leave its visible mesh behind at the old
+ * spot while the real car sat somewhere else, invisible.
  */
-function settleShovedCar(g, other) {
+function settlePushedCar(g, other) {
   clampToWorld(other, 30);
   resolveCircleCollision(g.city, other, CAR.radius);
   syncCarMesh(other, 0);
 }
 
 /** Carry a car's knock velocity for one frame, decaying fast. */
-function applyShove(car, dt) {
+function carryShove(car, dt) {
   if (!car.shoveX && !car.shoveY) return;
   car.x += car.shoveX * dt;
   car.y += car.shoveY * dt;
@@ -353,10 +353,11 @@ function applyShove(car, dt) {
 }
 
 /**
- * The wreck state, entered at hp <= 0 however the damage arrived (crash,
- * fists, a wall): sunk and tilted via syncCarMesh, speed zero, never
- * enterable (nearestEnterableCar skips wrecked), and no fleet system
- * moves it again — traffic and police updates both skip wrecked cars.
+ * The wreck state, entered at hp <= 0 however the damage arrived
+ * (crash, fists, a wall): sunk and tilted via syncCarMesh, speed zero,
+ * never enterable (nearestEnterableCar skips wrecked), and no fleet
+ * system moves it again — traffic and police updates both skip
+ * wrecked cars.
  */
 export function wreckCar(g, car) {
   if (car.wrecked) return;
@@ -371,58 +372,59 @@ export function wreckCar(g, car) {
   syncCarMesh(car, 0);
 }
 
-// --- Wreck fire ---------------------------------------------------------
-// A wreck burns so "destroyed" reads at a glance, then leaves the world
-// so a dead car cannot block a lane forever. The whole show is sprites
-// and timing — the fire deals no damage, applies no heat, and touches no
-// mission, police or save state. Two shared canvas textures (a flame
-// blob, a smoke puff) serve every wreck; each burning car owns only its
-// sprite materials, created when it catches and disposed when the fire
-// goes out. Animation is analytic in g.time, so nothing allocates and
-// nothing drifts per frame.
+/* ------------------------------------------------------------ wreck fire */
+// A wreck burns so "destroyed" reads at a glance, then leaves the
+// world so a dead car cannot block a lane forever. The whole show is
+// sprites and timing — the fire deals no damage, applies no heat, and
+// touches no mission, police or save state. Two shared canvas textures
+// (a flame blob, a smoke puff) serve every wreck; each burning car
+// owns only its sprite materials, created when it catches and disposed
+// when the fire goes out. Animation is analytic in g.time, so nothing
+// allocates and nothing drifts per frame.
 
-let flameTexture = null;
-let smokeTexture = null;
-
-/** The two shared fire textures, drawn once: flame blob and smoke puff. */
-function fireTextures() {
-  if (flameTexture) return { flameTexture, smokeTexture };
-  const fc = document.createElement('canvas');
-  fc.width = 64;
-  fc.height = 64;
-  const fx = fc.getContext('2d');
-  const fg = fx.createRadialGradient(32, 40, 2, 32, 34, 30);
-  fg.addColorStop(0, 'rgba(255,244,200,1)');
-  fg.addColorStop(0.3, 'rgba(255,196,64,0.95)');
-  fg.addColorStop(0.65, 'rgba(255,110,32,0.55)');
-  fg.addColorStop(1, 'rgba(255,80,20,0)');
-  fx.fillStyle = fg;
-  fx.beginPath();
-  fx.arc(32, 34, 30, 0, Math.PI * 2);
-  fx.fill();
-  flameTexture = new THREE.CanvasTexture(fc);
-  const sc = document.createElement('canvas');
-  sc.width = 64;
-  sc.height = 64;
-  const sx = sc.getContext('2d');
-  const sg = sx.createRadialGradient(32, 32, 2, 32, 32, 30);
-  sg.addColorStop(0, 'rgba(255,255,255,0.85)');
-  sg.addColorStop(0.6, 'rgba(255,255,255,0.4)');
-  sg.addColorStop(1, 'rgba(255,255,255,0)');
-  sx.fillStyle = sg;
-  sx.beginPath();
-  sx.arc(32, 32, 30, 0, Math.PI * 2);
-  sx.fill();
-  smokeTexture = new THREE.CanvasTexture(sc);
-  return { flameTexture, smokeTexture };
+/** One radial-gradient canvas texture, drawn once and shared. */
+function radialTexture(centreY, innerLift, stops) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(32, centreY + innerLift, 2, 32, centreY, 30);
+  for (const [at, rgba] of stops) grad.addColorStop(at, rgba);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(32, centreY, 30, 0, Math.PI * 2);
+  ctx.fill();
+  return new THREE.CanvasTexture(canvas);
 }
 
+let flameTex = null;
+let smokeTex = null;
+
+/** The two shared fire textures: flame blob and smoke puff. */
+function burnTextures() {
+  if (!flameTex) {
+    flameTex = radialTexture(34, 6, [
+      [0, 'rgba(255,244,200,1)'],
+      [0.3, 'rgba(255,196,64,0.95)'],
+      [0.65, 'rgba(255,110,32,0.55)'],
+      [1, 'rgba(255,80,20,0)'],
+    ]);
+    smokeTex = radialTexture(32, 0, [
+      [0, 'rgba(255,255,255,0.85)'],
+      [0.6, 'rgba(255,255,255,0.4)'],
+      [1, 'rgba(255,255,255,0)'],
+    ]);
+  }
+  return { flameTex, smokeTex };
+}
+
+const FLAME_SPOTS = [{ x: -13, y: 15, s: 17 }, { x: 1, y: 18, s: 22 }, { x: 13, y: 14, s: 15 }];
+
 /** Raise a wreck's fire: three flames along the body, four smoke puffs. */
-function makeFireFx(g, car) {
-  const { flameTexture: fTex, smokeTexture: sTex } = fireTextures();
+function igniteWreck(g, car) {
+  const { flameTex: fTex, smokeTex: sTex } = burnTextures();
   const group = new THREE.Group();
-  const flames = [];
-  for (const d of [{ x: -13, y: 15, s: 17 }, { x: 1, y: 18, s: 22 }, { x: 13, y: 14, s: 15 }]) {
+  const flames = FLAME_SPOTS.map((d) => {
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({
       map: fTex, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, opacity: 0.95,
     }));
@@ -430,27 +432,26 @@ function makeFireFx(g, car) {
     sp.scale.set(d.s, d.s * 1.3, 1);
     sp.renderOrder = 940;
     group.add(sp);
-    flames.push({ sp, base: d.s, y: d.y });
-  }
-  const smokes = [];
-  for (let i = 0; i < 4; i += 1) {
+    return { sp, base: d.s, y: d.y };
+  });
+  const smokes = [0, 1, 2, 3].map((i) => {
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({
       map: sTex, color: 0x35353c, transparent: true, depthWrite: false, opacity: 0,
     }));
     sp.renderOrder = 939;
     group.add(sp);
-    smokes.push({ sp, phase: i / 4 });
-  }
+    return { sp, phase: i / 4 };
+  });
   group.position.set(car.x, 0, car.y);
   group.rotation.y = -car.angle;
   g.scene.add(group);
-  // A fixed per-car seed from where it died — no rng draws, so the fire
-  // can never perturb the seeded sequences anything else relies on.
+  // A fixed per-car seed from where it died — no rng draws, so the
+  // fire can never perturb the seeded sequences anything else relies on.
   return { group, flames, smokes, seed: Math.abs(car.x * 0.371 + car.y * 0.733) % 10 };
 }
 
 /** Put a wreck's fire out and free its sprite materials. */
-function removeFireFx(g, car) {
+function douseWreck(g, car) {
   const fx = car.fireFx;
   if (!fx) return;
   g.scene.remove(fx.group);
@@ -488,6 +489,32 @@ function isRepoTarget(g, car) {
   return !!(m && m.active && m.index === 3 && m.targetCar === car);
 }
 
+/** Animate one burning wreck for this frame (flames, then smoke). */
+function animateFire(g, car, fx) {
+  fx.group.position.set(car.x, 0, car.y);
+  fx.group.rotation.y = -car.angle;
+  // The fire dies down over its last four seconds.
+  const dieDown = Math.min(1, (WRECK_BURN.burn - car.burnT) / 4);
+  fx.flames.forEach((f, i) => {
+    const flick = 0.82 + 0.28 * Math.sin(g.time * 23 + fx.seed * 7 + i * 2.3) * Math.sin(g.time * 9.1 + i * 1.7);
+    const s = f.base * flick * Math.max(0.12, dieDown);
+    f.sp.scale.set(s, s * 1.3, 1);
+    f.sp.material.opacity = 0.95 * Math.max(0.15, dieDown);
+    f.sp.position.y = f.y + Math.sin(g.time * 13 + i * 2.0) * 1.2;
+  });
+  fx.smokes.forEach((s, i) => {
+    const cyc = (g.time * 0.14 + s.phase + fx.seed * 0.05) % 1; // ~7 s rise
+    s.sp.position.set(
+      Math.sin(fx.seed * 9 + i * 2.4) * 6 + cyc * 10,
+      24 + cyc * 52,
+      Math.cos(fx.seed * 7 + i) * 5,
+    );
+    const sc = 12 + cyc * 26;
+    s.sp.scale.set(sc, sc, 1);
+    s.sp.material.opacity = 0.34 * Math.sin(Math.min(1, cyc) * Math.PI) * Math.min(1, dieDown + 0.25);
+  });
+}
+
 /**
  * Run every wreck's afterlife for one frame: flames up while it burns,
  * dying down at the end of WRECK_BURN.burn, then the sink and removal
@@ -503,7 +530,7 @@ export function updateWrecks(g, dt) {
       // Back from the dead (a wreck repaired at Spray 'n Go, or a
       // bought car un-wrecked at the desk): the fire goes out with
       // the wreck state, and any sink is undone.
-      if (car.fireFx) removeFireFx(g, car);
+      if (car.fireFx) douseWreck(g, car);
       if (car.sinkY) {
         car.sinkY = 0;
         syncCarMesh(car, 0);
@@ -512,34 +539,12 @@ export function updateWrecks(g, dt) {
     }
     car.burnT = (car.burnT ?? 0) + dt;
     if (car.burnT < WRECK_BURN.burn) {
-      if (!car.fireFx) car.fireFx = makeFireFx(g, car);
-      const fx = car.fireFx;
-      fx.group.position.set(car.x, 0, car.y);
-      fx.group.rotation.y = -car.angle;
-      // The fire dies down over its last four seconds.
-      const dieDown = Math.min(1, (WRECK_BURN.burn - car.burnT) / 4);
-      fx.flames.forEach((f, i) => {
-        const flick = 0.82 + 0.28 * Math.sin(g.time * 23 + fx.seed * 7 + i * 2.3) * Math.sin(g.time * 9.1 + i * 1.7);
-        const s = f.base * flick * Math.max(0.12, dieDown);
-        f.sp.scale.set(s, s * 1.3, 1);
-        f.sp.material.opacity = 0.95 * Math.max(0.15, dieDown);
-        f.sp.position.y = f.y + Math.sin(g.time * 13 + i * 2.0) * 1.2;
-      });
-      fx.smokes.forEach((s, i) => {
-        const cyc = (g.time * 0.14 + s.phase + fx.seed * 0.05) % 1; // ~7 s rise
-        s.sp.position.set(
-          Math.sin(fx.seed * 9 + i * 2.4) * 6 + cyc * 10,
-          24 + cyc * 52,
-          Math.cos(fx.seed * 7 + i) * 5,
-        );
-        const sc = 12 + cyc * 26;
-        s.sp.scale.set(sc, sc, 1);
-        s.sp.material.opacity = 0.34 * Math.sin(Math.min(1, cyc) * Math.PI) * Math.min(1, dieDown + 0.25);
-      });
+      if (!car.fireFx) car.fireFx = igniteWreck(g, car);
+      animateFire(g, car, car.fireFx);
       continue;
     }
     // The fire is out.
-    if (car.fireFx) removeFireFx(g, car);
+    if (car.fireFx) douseWreck(g, car);
     if (isMissionCritical(g, car) || car.owned || car.occupant) continue; // stays a plain wreck
     car.sinkY = Math.min(1, (car.burnT - WRECK_BURN.burn) / WRECK_BURN.fade) * 27;
     syncCarMesh(car, 0);
@@ -550,6 +555,8 @@ export function updateWrecks(g, dt) {
     }
   }
 }
+
+/* ---------------------------------------------------------------- damage */
 
 /**
  * Apply damage to a car; crossing to zero enters the wreck state. When
@@ -593,6 +600,180 @@ export function crashDamageCar(g, car, amount) {
   damageCar(g, car, car.occupant === 'player' ? amount * DRIVEN_CRASH_TAKEN : amount);
 }
 
+/* --------------------------------------------------------- free movement */
+
+/**
+ * A crash-encounter record (see resolveCarContact) ends once the pair
+ * has properly parted — the partner is gone from the world or the cars
+ * are well clear of each other — so the NEXT meeting is a new encounter
+ * whose first hit counts again.
+ */
+function partCrashPair(g, car) {
+  if (!car.crashPartner) return;
+  const partner = car.crashPartner;
+  if (!g.cars.includes(partner)
+    || Math.hypot(car.x - partner.x, car.y - partner.y) > 110) {
+    car.crashPartner = null;
+    car.crashPartnerUntil = 0;
+  }
+}
+
+/**
+ * Run a free car into the buildings: resolve it out of whatever it
+ * hit, report a crash event on a hard impact, bill wall damage by the
+ * speed INTO the wall (the resolver's push-out points along the wall's
+ * normal, so the closing speed is the velocity component against it —
+ * rubbing along a facade while parking has almost no inward component
+ * and stays free), and bounce the car back off its approach speed.
+ */
+function wallHit(g, car, travel, prevSpeed) {
+  const attX = car.x;
+  const attY = car.y;
+  if (!resolveCircleCollision(g.city, car, CAR.radius)) return;
+  if (Math.abs(prevSpeed) > 190) {
+    g.events.push({ type: 'crash', strength: Math.min(1, Math.abs(prevSpeed) / 420), byPlayer: car.occupant === 'player' });
+  }
+  const pushX = car.x - attX;
+  const pushY = car.y - attY;
+  const pushLen = Math.hypot(pushX, pushY);
+  if (pushLen > 0.01) {
+    const closing = -(Math.cos(travel) * prevSpeed * (pushX / pushLen)
+      + Math.sin(travel) * prevSpeed * (pushY / pushLen));
+    if (closing > 80) {
+      crashDamageCar(g, car, Math.min(1, closing / 420) * CRASH_DAMAGE.wall);
+    }
+  }
+  car.speed = -prevSpeed * 0.22;
+}
+
+/**
+ * One car-to-car contact for the moving car: separate the pair, then —
+ * if the closing speed makes it a real impact — knock both, bill both
+ * through the crash gate, and report it. The impact of a bump is the
+ * CLOSING SPEED along the contact normal, never either car's raw
+ * speed: two cars cruising at the same speed have a closing speed of
+ * zero and must grind against each other, not bounce apart.
+ */
+function resolveCarContact(g, car, other, travel) {
+  const dx = car.x - other.x;
+  const dy = car.y - other.y;
+  const d2 = dx * dx + dy * dy;
+  const rr = CAR.radius + CAR.radius - 4;
+  if (d2 >= rr * rr || d2 < 0.01) return;
+  const d = Math.sqrt(d2);
+  const nx = dx / d;
+  const ny = dy / d;
+  const relVx = Math.cos(travel) * car.speed - Math.cos(other.angle) * (other.speed || 0);
+  const relVy = Math.sin(travel) * car.speed - Math.sin(other.angle) * (other.speed || 0);
+  const closing = -(relVx * nx + relVy * ny);
+  // Positional separation always applies: it is what lets a slow push
+  // grind a stopped or slower car ahead of you instead of bouncing
+  // off. A WRECKED car is the exception: dead weight never gives
+  // ground — the rule separateTrafficCars already keeps for traffic —
+  // so the mover takes the whole separation himself and the wreck is
+  // not shoved, knocked or slid by the hit at all. Without this, a
+  // cruiser still hunting the player bulldozed its own wrecked
+  // colleague down the street, half a push per frame for as long as
+  // the chase ran through the wreck's spot: a wreck that "kept
+  // moving" (measured: 87 units in one sampled chase).
+  const push = (rr - d) / 2;
+  if (other.wrecked) {
+    car.x += nx * push * 2;
+    car.y += ny * push * 2;
+  } else {
+    car.x += nx * push;
+    car.y += ny * push;
+    if (other.kind !== 'parked' || closing > 25) {
+      other.x -= nx * push * 0.5;
+      other.y -= ny * push * 0.5;
+      settlePushedCar(g, other);
+    }
+  }
+  if (closing <= 55) return;
+  // A real impact, and its strength follows the speed DIFFERENCE (the
+  // same /420 scale as a building hit, so the crash sound, the camera
+  // shake and the hitCar heat in main.js all track the actual blow).
+  const strength = Math.min(1, closing / 420);
+  if (other.kind === 'parked' && !other.wrecked) {
+    // Parked cars have no update loop to carry a shove velocity, so
+    // the knock lands as extra displacement right now.
+    const extra = Math.min(44, closing * 0.13);
+    other.x -= nx * extra;
+    other.y -= ny * extra;
+    settlePushedCar(g, other);
+  } else if (!other.wrecked) {
+    other.shoveX -= nx * closing * 0.9;
+    other.shoveY -= ny * closing * 0.9;
+  }
+  // The pair must actually PART. The positional nudge above only
+  // untangles the overlap; at speed the mover used to keep half its
+  // pace and drive straight back into the same car, so one accident
+  // re-hit every crash-grace window (the player's report: "the bounce
+  // is too weak and I just eat consecutive hits"). Now the mover is
+  // knocked back along the normal as a shove, and loses a further
+  // slice of speed to a rebound scaled by how head-on the hit was — a
+  // full-tilt head-on nearly stops it, a glancing side-swipe barely
+  // does.
+  car.shoveX += nx * closing * 0.5;
+  car.shoveY += ny * closing * 0.5;
+  car.speed *= 1 - 0.5 * strength;
+  const velSign = Math.sign(car.speed) || 1;
+  const headOn = Math.max(0, Math.min(1,
+    -(Math.cos(travel) * velSign * nx + Math.sin(travel) * velSign * ny)));
+  // The rebound grows with the blow: a tap leaves the mover rolling
+  // forward, a full-strength head-on throws it bodily backward, so the
+  // pair's separation keeps growing instead of the mover coasting
+  // straight back into the same car (measured before this scaling:
+  // the gap shrank again inside the first second).
+  car.speed -= velSign * closing * (0.35 + 0.35 * strength) * headOn;
+  // Both cars pay for a real impact, the struck car more than the
+  // mover (CRASH_DAMAGE) — through the grace window, so a contact
+  // that lasts many frames still costs only the one hit. A wrecked
+  // car takes no further damage; damageCar handles the crossing into
+  // the wreck state.
+  // ONE exception, for the PLAYER's car: one crash encounter with one
+  // partner costs it one hit, full stop. The per-car grace above
+  // re-opens every 0.8s, so a grind or a boxed-in pile-up — where the
+  // pair physically cannot part — kept billing the player a fresh hit
+  // each window until the car died (measured: 5 hits, HP 100 -> 18,
+  // over 4 pinned seconds). After a partner has damaged the player's
+  // car, that partner is recorded and cannot damage it again until
+  // the pair has properly parted (cleared at the top of moveFreeCar)
+  // or the record lapses. Damage the player's car DEALS is never
+  // gated, and neither is any other car's — ramming the courier still
+  // wears it down hit by hit, and a fresh partner always lands its
+  // own first hit.
+  const playerCar = car.occupant === 'player' ? car
+    : (other.occupant === 'player' ? other : null);
+  const partner = playerCar === null ? null : (playerCar === car ? other : car);
+  const gated = playerCar !== null
+    && playerCar.crashPartner === partner
+    && g.time < playerCar.crashPartnerUntil;
+  // The gate is per VICTIM: it shields only the player's car. The
+  // other car keeps paying on the ordinary grace schedule — a courier
+  // being rammed in a sustained pin still wears down hit by hit,
+  // exactly as before.
+  if (car !== playerCar || !gated) crashDamageCar(g, car, strength * CRASH_DAMAGE.mover);
+  if (other !== playerCar || !gated) crashDamageCar(g, other, strength * CRASH_DAMAGE.struck);
+  if (playerCar !== null && !gated) {
+    playerCar.crashPartner = partner;
+    playerCar.crashPartnerUntil = g.time + 6;
+  }
+  g.events.push({ type: 'crash', strength, byPlayer: car.occupant === 'player' });
+}
+
+/** Report every pedestrian this fast-moving car is running over. */
+function runOverScan(g, car) {
+  for (const ped of g.peds) {
+    if (ped.state === 'down' || ped.state === 'inCar') continue;
+    const dx = ped.x - car.x;
+    const dy = ped.y - car.y;
+    if (dx * dx + dy * dy < 26 * 26) {
+      g.events.push({ type: 'runover', ped, speed: Math.abs(car.speed), byPlayer: car.occupant === 'player' });
+    }
+  }
+}
+
 /**
  * Move a free-driving car (player's or police) by its angle and speed, resolving
  * building collisions (with a crash event when the impact is hard), car-to-car
@@ -604,19 +785,8 @@ export function moveFreeCar(g, car, dt) {
     syncCarMesh(car, dt);
     return;
   }
-  // A crash-encounter record (see the impact branch below) ends once
-  // the pair has properly parted — the partner is gone from the world
-  // or the cars are well clear of each other — so the NEXT meeting is
-  // a new encounter whose first hit counts again.
-  if (car.crashPartner) {
-    const partner = car.crashPartner;
-    if (!g.cars.includes(partner)
-      || Math.hypot(car.x - partner.x, car.y - partner.y) > 110) {
-      car.crashPartner = null;
-      car.crashPartnerUntil = 0;
-    }
-  }
-  applyShove(car, dt);
+  partCrashPair(g, car);
+  carryShove(car, dt);
   const prevSpeed = car.speed;
   // While drifting, the car travels a little wide of where its nose
   // points — that gap is the slide. Every other driver keeps drift 0.
@@ -624,153 +794,11 @@ export function moveFreeCar(g, car, dt) {
   car.x += Math.cos(travel) * car.speed * dt;
   car.y += Math.sin(travel) * car.speed * dt;
   clampToWorld(car, 30);
-  const attX = car.x;
-  const attY = car.y;
-  if (resolveCircleCollision(g.city, car, CAR.radius)) {
-    if (Math.abs(prevSpeed) > 190) {
-      g.events.push({ type: 'crash', strength: Math.min(1, Math.abs(prevSpeed) / 420), byPlayer: car.occupant === 'player' });
-    }
-    // Wall damage follows the speed INTO the wall, not the raw speed:
-    // the resolver's push-out vector points along the wall's normal, so
-    // the closing speed is the velocity component against it. Rubbing
-    // along a facade while parking has almost no inward component and
-    // stays free; a fast head-on pays the struck car's share of damage.
-    const pushX = car.x - attX;
-    const pushY = car.y - attY;
-    const pushLen = Math.hypot(pushX, pushY);
-    if (pushLen > 0.01) {
-      const vx = Math.cos(travel) * prevSpeed;
-      const vy = Math.sin(travel) * prevSpeed;
-      const closing = -(vx * (pushX / pushLen) + vy * (pushY / pushLen));
-      if (closing > 80) {
-        crashDamageCar(g, car, Math.min(1, closing / 420) * CRASH_DAMAGE.wall);
-      }
-    }
-    car.speed = -prevSpeed * 0.22;
-  }
+  wallHit(g, car, travel, prevSpeed);
   for (const other of g.cars) {
-    if (other === car) continue;
-    const dx = car.x - other.x;
-    const dy = car.y - other.y;
-    const d2 = dx * dx + dy * dy;
-    const rr = CAR.radius + CAR.radius - 4;
-    if (d2 >= rr * rr || d2 < 0.01) continue;
-    const d = Math.sqrt(d2);
-    const nx = dx / d;
-    const ny = dy / d;
-    // The impact of a bump is the CLOSING SPEED along the contact normal —
-    // how fast the gap between the two cars is shrinking — never either
-    // car's raw speed. Two cars cruising at the same speed have a closing
-    // speed of zero: they must grind against each other, not bounce apart.
-    const relVx = Math.cos(travel) * car.speed - Math.cos(other.angle) * (other.speed || 0);
-    const relVy = Math.sin(travel) * car.speed - Math.sin(other.angle) * (other.speed || 0);
-    const closing = -(relVx * nx + relVy * ny);
-    // Positional separation always applies: it is what lets a slow push
-    // grind a stopped or slower car ahead of you instead of bouncing off.
-    // A WRECKED car is the exception: dead weight never gives ground —
-    // the rule separateTrafficCars already keeps for traffic — so the
-    // mover takes the whole separation himself and the wreck is not
-    // shoved, knocked or slid by the hit at all. Without this, a
-    // cruiser still hunting the player bulldozed its own wrecked
-    // colleague down the street, half a push per frame for as long as
-    // the chase ran through the wreck's spot: a wreck that "kept
-    // moving" (measured: 87 units in one sampled chase).
-    const push = (rr - d) / 2;
-    if (other.wrecked) {
-      car.x += nx * push * 2;
-      car.y += ny * push * 2;
-    } else {
-      car.x += nx * push;
-      car.y += ny * push;
-      if (other.kind !== 'parked' || closing > 25) {
-        other.x -= nx * push * 0.5;
-        other.y -= ny * push * 0.5;
-        settleShovedCar(g, other);
-      }
-    }
-    if (closing > 55) {
-      // A real impact, and its strength follows the speed DIFFERENCE (the
-      // same /420 scale as a building hit, so the crash sound, the camera
-      // shake and the hitCar heat in main.js all track the actual blow).
-      const strength = Math.min(1, closing / 420);
-      if (other.kind === 'parked' && !other.wrecked) {
-        // Parked cars have no update loop to carry a shove velocity, so
-        // the knock lands as extra displacement right now.
-        const extra = Math.min(44, closing * 0.13);
-        other.x -= nx * extra;
-        other.y -= ny * extra;
-        settleShovedCar(g, other);
-      } else if (!other.wrecked) {
-        other.shoveX -= nx * closing * 0.9;
-        other.shoveY -= ny * closing * 0.9;
-      }
-      // The pair must actually PART. The positional nudge above only
-      // untangles the overlap; at speed the mover used to keep half its
-      // pace and drive straight back into the same car, so one accident
-      // re-hit every crash-grace window (the player's report: "the
-      // bounce is too weak and I just eat consecutive hits"). Now the
-      // mover is knocked back along the normal as a shove, and loses a
-      // further slice of speed to a rebound scaled by how head-on the
-      // hit was — a full-tilt head-on nearly stops it, a glancing
-      // side-swipe barely does.
-      car.shoveX += nx * closing * 0.5;
-      car.shoveY += ny * closing * 0.5;
-      car.speed *= 1 - 0.5 * strength;
-      const velSign = Math.sign(car.speed) || 1;
-      const headOn = Math.max(0, Math.min(1,
-        -(Math.cos(travel) * velSign * nx + Math.sin(travel) * velSign * ny)));
-      // The rebound grows with the blow: a tap leaves the mover rolling
-      // forward, a full-strength head-on throws it bodily backward, so
-      // the pair's separation keeps growing instead of the mover
-      // coasting straight back into the same car (measured before this
-      // scaling: the gap shrank again inside the first second).
-      car.speed -= velSign * closing * (0.35 + 0.35 * strength) * headOn;
-      // Both cars pay for a real impact, the struck car more than the
-      // mover (CRASH_DAMAGE) — through the grace window, so a contact
-      // that lasts many frames still costs only the one hit. A wrecked
-      // car takes no further damage; damageCar handles the crossing
-      // into the wreck state.
-      // ONE exception, for the PLAYER's car: one crash encounter with
-      // one partner costs it one hit, full stop. The per-car grace
-      // above re-opens every 0.8s, so a grind or a boxed-in pile-up —
-      // where the pair physically cannot part — kept billing the
-      // player a fresh hit each window until the car died (measured:
-      // 5 hits, HP 100 -> 18, over 4 pinned seconds). After a partner
-      // has damaged the player's car, that partner is recorded and
-      // cannot damage it again until the pair has properly parted
-      // (cleared at the top of this function) or the record lapses.
-      // Damage the player's car DEALS is never gated, and neither is
-      // any other car's — ramming the courier still wears it down hit
-      // by hit, and a fresh partner always lands its own first hit.
-      const playerCar = car.occupant === 'player' ? car
-        : (other.occupant === 'player' ? other : null);
-      const partner = playerCar === null ? null : (playerCar === car ? other : car);
-      const gated = playerCar !== null
-        && playerCar.crashPartner === partner
-        && g.time < playerCar.crashPartnerUntil;
-      // The gate is per VICTIM: it shields only the player's car. The
-      // other car keeps paying on the ordinary grace schedule — a
-      // courier being rammed in a sustained pin still wears down hit
-      // by hit, exactly as before.
-      if (car !== playerCar || !gated) crashDamageCar(g, car, strength * CRASH_DAMAGE.mover);
-      if (other !== playerCar || !gated) crashDamageCar(g, other, strength * CRASH_DAMAGE.struck);
-      if (playerCar !== null && !gated) {
-        playerCar.crashPartner = partner;
-        playerCar.crashPartnerUntil = g.time + 6;
-      }
-      g.events.push({ type: 'crash', strength, byPlayer: car.occupant === 'player' });
-    }
+    if (other !== car) resolveCarContact(g, car, other, travel);
   }
-  if (Math.abs(car.speed) > 55) {
-    for (const ped of g.peds) {
-      if (ped.state === 'down' || ped.state === 'inCar') continue;
-      const dx = ped.x - car.x;
-      const dy = ped.y - car.y;
-      if (dx * dx + dy * dy < 26 * 26) {
-        g.events.push({ type: 'runover', ped, speed: Math.abs(car.speed), byPlayer: car.occupant === 'player' });
-      }
-    }
-  }
+  if (Math.abs(car.speed) > 55) runOverScan(g, car);
   syncCarMesh(car, dt);
 }
 
@@ -838,25 +866,20 @@ export function updatePlayerCarHits(g) {
   clampToWorld(p, 20);
 }
 
-/** The player's driving: arcade acceleration, braking, steering and drag. */
-export function drivePlayerCar(g, dt) {
-  const car = g.player.car;
-  if (!car || car.wrecked) return;
-  const axes = g.input.axes();
-  const throttle = -axes.y;
-  const steer = axes.x;
-  // --- Handbrake (Space; the touch DASH button doubles as BRAKE in a
-  // car). It is read FIRST because it overrides the throttle outright:
-  // the engine is cut and the rear wheels haul the car toward a stop
-  // with a hard LINEAR deceleration (CAR.handbrake, stronger than the
-  // foot brake), from either direction of travel. What DeepSeek's
-  // brush-up shipped here was only a proportional scrub (0.45 * speed
-  // per second, on top of the ordinary coast drag): barely better than
-  // coasting from top speed, and with W held the engine simply out-pulled
-  // it — the car stayed pinned at max speed, which is exactly what the
-  // player reported as "the brake doesn't work".
-  const a0 = Math.abs(car.speed);
-  const handbrake = g.input.down('Space');
+/**
+ * The throttle half of the player's driving: handbrake, engine, foot
+ * brake, reverse and coast. The handbrake is read FIRST because it
+ * overrides the throttle outright: the engine is cut and the rear
+ * wheels haul the car toward a stop with a hard LINEAR deceleration
+ * (CAR.handbrake, stronger than the foot brake), from either direction
+ * of travel. What an earlier brush-up shipped here was only a
+ * proportional scrub (0.45 * speed per second, on top of the ordinary
+ * coast drag): barely better than coasting from top speed, and with W
+ * held the engine simply out-pulled it — the car stayed pinned at max
+ * speed, which is exactly what the player reported as "the brake
+ * doesn't work".
+ */
+function applyThrottle(car, dt, throttle, handbrake) {
   if (handbrake) {
     const step = CAR.handbrake * dt;
     car.speed = Math.abs(car.speed) <= step ? 0 : car.speed - Math.sign(car.speed) * step;
@@ -869,11 +892,23 @@ export function drivePlayerCar(g, dt) {
     car.speed -= car.speed * 0.5 * dt;
     if (Math.abs(car.speed) < 4) car.speed = 0;
   }
+}
+
+/** The player's driving: arcade acceleration, braking, steering and drag. */
+export function drivePlayerCar(g, dt) {
+  const car = g.player.car;
+  if (!car || car.wrecked) return;
+  const axes = g.input.axes();
+  const throttle = -axes.y;
+  const steer = axes.x;
+  const a0 = Math.abs(car.speed);
+  const handbrake = g.input.down('Space');
+  applyThrottle(car, dt, throttle, handbrake);
   // Held at speed the handbrake also lets the nose come round faster
   // than grip would allow, and lets the car's travel lag behind its
   // heading — the rear steps out and the slide is visible from behind.
-  // Released, grip returns and the drift washes out. (The speed cost of
-  // sliding is the deceleration above; there is no separate scrub.)
+  // Released, grip returns and the drift washes out. (The speed cost
+  // of sliding is the deceleration above; there is no separate scrub.)
   const speedAbs = Math.abs(car.speed);
   const sliding = handbrake && speedAbs > 90;
   if (car.speed !== 0) {
@@ -898,8 +933,8 @@ export function drivePlayerCar(g, dt) {
     car.skidT = 0.42;
     g.events.push({ type: 'screech', strength: Math.min(1, speedAbs / 380) });
   }
-  // Brake-pedal SE, once per 0.35 s: the long screech above 240, the short
-  // one below it.
+  // Brake-pedal SE, once per 0.35 s: the long screech above 240, the
+  // short one below it.
   const braking = handbrake || (throttle < 0 && car.speed > a0);
   car.brakeT = Math.max(0, (car.brakeT ?? 0) - dt);
   if (braking && speedAbs > 150 && car.brakeT <= 0) {
@@ -912,19 +947,136 @@ export function drivePlayerCar(g, dt) {
   g.player.y = car.y;
 }
 
+/* --------------------------------------------------------------- traffic */
+// Lane-following works in the car's own frame: `lat` is the coordinate
+// across the road (the lane axis), `along` is distance ahead along the
+// direction of travel. Both scans below read the world through these.
+const latOf = (car, o) => (car.axis === 'y' ? o.x : o.y);
+const alongOf = (car, o) => (car.axis === 'y' ? (o.y - car.y) * car.dir : (o.x - car.x) * car.dir);
+
+/**
+ * Passing a stationary obstacle: parked cars sit at the kerb 41 from
+ * the road centre — 15 from the lane line, permanently inside the
+ * car-ahead corridor — and they never move. Measured consequence:
+ * every traffic car that came up behind one stopped 52 short and
+ * waited forever, and the queues behind them are the jam in the
+ * user's screenshot. Real drivers edge around a kerbside car, so when
+ * the obstacle ahead is a stationary car that is not live traffic
+ * (parked, wrecked, a cruiser holding its stop, a courier at a
+ * standstill), the target is a lateral ease away from it far enough to
+ * restore the corridor gap; live traffic ahead is never passed this
+ * way, and pedestrians never take part. Returns the offset target.
+ */
+function passScan(g, car) {
+  let target = 0;
+  let bestAlong = 170;
+  for (const other of g.cars) {
+    if (other === car || other.occupant === 'player') continue;
+    if (Math.abs(other.speed ?? 0) >= 5) continue;
+    if (other.kind === 'traffic' && !other.wrecked) continue;
+    const along = alongOf(car, other);
+    if (along < -20 || along > bestAlong) continue;
+    const gap = latOf(car, other) - car.lane; // signed: which side it sits
+    if (Math.abs(gap) >= 40) continue;
+    bestAlong = along;
+    const away = gap > 0 ? -1 : gap < 0 ? 1 : (car.lane > car.road ? -1 : 1);
+    const cap = car.creepT > 0 ? 40 : 24;
+    target = away * Math.min(cap, Math.max(0, 37 - Math.abs(gap)));
+  }
+  return target;
+}
+
+/**
+ * A car ahead in my path slows us down. The corridor is wider than my
+ * lane on purpose: a car CROSSING my path at an intersection
+ * (laterally near my lane line while it passes) counts too, so traffic
+ * brakes for a crossing car instead of driving into its flank and
+ * merging with it at the corner. Returns the speed ceiling and the
+ * car that imposed it.
+ */
+function aheadScan(g, car, myLat) {
+  let target = CAR.trafficSpeed;
+  let blocker = null;
+  for (const other of g.cars) {
+    if (other === car) continue;
+    const lateral = latOf(car, other) - myLat;
+    const along = alongOf(car, other);
+    if (Math.abs(lateral) < 34 && along > 0 && along < 80) {
+      const t = Math.max(0, (along - 52) * 4);
+      if (t < target) { target = t; blocker = other; }
+    }
+  }
+  return { target, blocker };
+}
+
+/**
+ * Pedestrians in the path get the same courtesy, on a braking curve:
+ * the target speed is the fastest speed from which this car can still
+ * stop TRAFFIC_YIELD.gap short of the person, so it eases in and halts
+ * instead of plowing through. The PLAYER first and foremost — a car
+ * coming down the street must never run down a player it had time to
+ * stop for (until now traffic never braked for anyone, and
+ * updatePlayerCarHits was the only thing standing between a crossing
+ * player and a car arriving from off-screen) — and any citizen caught
+ * in the lane gets the same mercy. A car already on top of someone at
+ * speed can still clip them; the curve only promises a stop when
+ * there was road to stop in. Police in pursuit and the courier never
+ * run this code.
+ */
+function pedScan(g, car, myLat) {
+  let target = CAR.trafficSpeed;
+  const yieldFor = (px, py) => {
+    const lateral = (car.axis === 'y' ? px : py) - myLat;
+    if (Math.abs(lateral) >= TRAFFIC_YIELD.corridor) return;
+    const along = car.axis === 'y' ? (py - car.y) * car.dir : (px - car.x) * car.dir;
+    if (along <= 0 || along > TRAFFIC_YIELD.range) return;
+    const t = Math.sqrt(2 * TRAFFIC_YIELD.brake * Math.max(0, along - TRAFFIC_YIELD.gap));
+    if (t < target) target = t;
+  };
+  if (g.player.state === 'foot') yieldFor(g.player.x, g.player.y);
+  for (const ped of g.peds) {
+    if (ped.state === 'down' || ped.state === 'inCar') continue;
+    yieldFor(ped.x, ped.y);
+  }
+  return target;
+}
+
+/**
+ * While creeping (see the patience rule in updateTraffic), stopped
+ * cars no longer hold this one — but moving cars and the player's car
+ * still do. Returns the creep speed ceiling.
+ */
+function creepScan(g, car, myLat) {
+  let target = 45;
+  for (const other of g.cars) {
+    if (other === car) continue;
+    const stopped = Math.abs(other.speed ?? 0) < 5;
+    const playerCar = other.occupant === 'player' || other === g.player.car;
+    if (stopped && !playerCar) continue;
+    const lateral = latOf(car, other) - myLat;
+    const along = alongOf(car, other);
+    if (Math.abs(lateral) < 34 && along > 0 && along < 80) {
+      target = Math.min(target, Math.max(0, (along - 52) * 4));
+    }
+  }
+  return target;
+}
+
 /** Traffic: follow the lane, slow for the car ahead, sometimes turn at crossings. */
 export function updateTraffic(g, dt) {
   for (const car of [...g.cars]) {
     if (car.kind !== 'traffic') continue;
-    // A car the player has taken is theirs: never lane-drive it out from
-    // under them and never despawn it. finishEnterCar already converts its
-    // kind away from 'traffic'; this is the belt-and-braces check so no
-    // path (a scramble interrupted mid-enter, a scene seating) can ever
-    // hand an occupied or player-owned car to the fleet logic.
+    // A car the player has taken is theirs: never lane-drive it out
+    // from under them and never despawn it. finishEnterCar already
+    // converts its kind away from 'traffic'; this is the
+    // belt-and-braces check so no path (a scramble interrupted
+    // mid-enter, a scene seating) can ever hand an occupied or
+    // player-owned car to the fleet logic.
     if (car.touched || car.occupant === 'player' || car.wrecked) continue;
-    // A knock from a harder car still lands: the shove's along-lane part
-    // persists (the lane glue below only re-seats the lateral coordinate).
-    applyShove(car, dt);
+    // A knock from a harder car still lands: the shove's along-lane
+    // part persists (the lane glue below only re-seats the lateral
+    // coordinate).
+    carryShove(car, dt);
     // Despawn far-away traffic and respawn it elsewhere, keeping the city alive.
     const distToPlayer = Math.hypot(car.x - g.player.x, car.y - g.player.y);
     if (distToPlayer > 1500) {
@@ -932,101 +1084,30 @@ export function updateTraffic(g, dt) {
       spawnTrafficCar(g);
       continue;
     }
-    // --- Passing a stationary obstacle --------------------------------
-    // Parked cars sit at the kerb 41 from the road centre — 15 from the
-    // lane line, permanently inside the car-ahead corridor below — and
-    // they never move. Measured consequence: every traffic car that came
-    // up behind one stopped 52 short and waited forever, and the queues
-    // behind them are the jam in the user's screenshot. Real drivers
-    // edge around a kerbside car, so: when the obstacle ahead is a
-    // stationary car that is not live traffic (parked, wrecked, a
-    // cruiser holding its stop, a courier at a standstill), ease
-    // laterally away from it far enough to restore the corridor gap,
-    // pass, and ease back. Live traffic ahead is never passed this way
-    // — queueing behind it is the traffic-probe behaviour — and
-    // pedestrians never take part: their yield below stays absolute.
     car.off ??= 0; car.blockedT ??= 0; car.creepT ??= 0;
-    const latOf = (o) => (car.axis === 'y' ? o.x : o.y);
-    const alongOf = (o) => (car.axis === 'y' ? (o.y - car.y) * car.dir : (o.x - car.x) * car.dir);
-    let offTarget = 0;
-    {
-      let bestAlong = 170;
-      for (const other of g.cars) {
-        if (other === car || other.occupant === 'player') continue;
-        if (Math.abs(other.speed ?? 0) >= 5) continue;
-        if (other.kind === 'traffic' && !other.wrecked) continue;
-        const along = alongOf(other);
-        if (along < -20 || along > bestAlong) continue;
-        const gap = latOf(other) - car.lane; // signed: which side it sits
-        if (Math.abs(gap) >= 40) continue;
-        bestAlong = along;
-        const away = gap > 0 ? -1 : gap < 0 ? 1 : (car.lane > car.road ? -1 : 1);
-        const cap = car.creepT > 0 ? 40 : 24;
-        offTarget = away * Math.min(cap, Math.max(0, 37 - Math.abs(gap)));
-      }
-    }
+    const offTarget = passScan(g, car);
     car.off += (offTarget - car.off) * (1 - Math.exp(-6 * dt));
     if (offTarget === 0 && Math.abs(car.off) < 0.05) car.off = 0;
     const myLat = car.lane + car.off;
 
-    // A car ahead in my path slows us down. The corridor is wider than
-    // my lane on purpose: a car CROSSING my path at an intersection
-    // (laterally near my lane line while it passes) counts too, so
-    // traffic brakes for a crossing car instead of driving into its
-    // flank and merging with it at the corner.
-    let carTarget = CAR.trafficSpeed;
-    let blocker = null;
-    for (const other of g.cars) {
-      if (other === car) continue;
-      const lateral = latOf(other) - myLat;
-      const along = alongOf(other);
-      if (Math.abs(lateral) < 34 && along > 0 && along < 80) {
-        const t = Math.max(0, (along - 52) * 4);
-        if (t < carTarget) { carTarget = t; blocker = other; }
-      }
-    }
-    let targetSpeed = carTarget;
-    // Pedestrians in the path get the same courtesy, on a braking
-    // curve: the target speed is the fastest speed from which this car
-    // can still stop TRAFFIC_YIELD.gap short of the person, so it eases
-    // in and halts instead of plowing through. The PLAYER first and
-    // foremost — a car coming down the street must never run down a
-    // player it had time to stop for (until now traffic never braked
-    // for anyone, and updatePlayerCarHits was the only thing standing
-    // between a crossing player and a car arriving from off-screen) —
-    // and any citizen caught in the lane gets the same mercy. A car
-    // already on top of someone at speed can still clip them; the
-    // curve only promises a stop when there was road to stop in.
-    // Police in pursuit and the courier never run this code.
-    let pedTarget = CAR.trafficSpeed;
-    const yieldFor = (px, py) => {
-      const lateral = (car.axis === 'y' ? px : py) - myLat;
-      if (Math.abs(lateral) >= TRAFFIC_YIELD.corridor) return;
-      const along = car.axis === 'y' ? (py - car.y) * car.dir : (px - car.x) * car.dir;
-      if (along <= 0 || along > TRAFFIC_YIELD.range) return;
-      const t = Math.sqrt(2 * TRAFFIC_YIELD.brake * Math.max(0, along - TRAFFIC_YIELD.gap));
-      if (t < pedTarget) pedTarget = t;
-    };
-    if (g.player.state === 'foot') yieldFor(g.player.x, g.player.y);
-    for (const ped of g.peds) {
-      if (ped.state === 'down' || ped.state === 'inCar') continue;
-      yieldFor(ped.x, ped.y);
-    }
-    targetSpeed = Math.min(targetSpeed, pedTarget);
+    const { target: carTarget, blocker } = aheadScan(g, car, myLat);
+    const pedTarget = pedScan(g, car, myLat);
+    let targetSpeed = Math.min(carTarget, pedTarget);
 
-    // --- Patience: a car-yield that expires into a slow creep ----------
+    // --- Patience: a car-yield that expires into a slow creep ------
     // Two traffic cars can also stop each other dead at a junction
     // corner, each waiting for the other to clear a corridor neither
-    // can enter first; and an obstacle the kerb pass cannot fully clear
-    // (a wreck mid-lane) waits forever the same way. So a car held by a
-    // STOPPED car accrues patience, and past its (staggered) threshold
-    // it creeps at walking pace for a few seconds: stopped-car braking
-    // is ignored while creeping, but moving cars still stop it, the
-    // player's car still stops it, and every pedestrian still stops it
-    // cold — patience never accrues while a person is the blocker, and
-    // the creep target is minned with the pedestrian yield every frame.
-    // The car that has waited longest moves first; the other's blocker
-    // is then a moving car, its patience resets, and it waits its turn.
+    // can enter first; and an obstacle the kerb pass cannot fully
+    // clear (a wreck mid-lane) waits forever the same way. So a car
+    // held by a STOPPED car accrues patience, and past its
+    // (staggered) threshold it creeps at walking pace for a few
+    // seconds: stopped-car braking is ignored while creeping, but
+    // moving cars still stop it, the player's car still stops it,
+    // and every pedestrian still stops it cold — patience never
+    // accrues while a person is the blocker, and the creep target is
+    // minned with the pedestrian yield every frame. The car that has
+    // waited longest moves first; the other's blocker is then a
+    // moving car, its patience resets, and it waits its turn.
     const heldByCar = blocker !== null && Math.abs(blocker.speed ?? 0) < 5
       && blocker.occupant !== 'player' && blocker !== g.player.car
       && carTarget < 20 && car.speed < 8 && pedTarget >= 20;
@@ -1035,19 +1116,7 @@ export function updateTraffic(g, dt) {
     if (car.creepT > 0) car.creepT -= dt;
     if (car.creepT <= 0 && car.blockedT > car.creepDelay) { car.creepT = 5; car.blockedT = 0; }
     if (car.creepT > 0) {
-      let creepTarget = 45;
-      for (const other of g.cars) {
-        if (other === car) continue;
-        const stopped = Math.abs(other.speed ?? 0) < 5;
-        const playerCar = other.occupant === 'player' || other === g.player.car;
-        if (stopped && !playerCar) continue;
-        const lateral = latOf(other) - myLat;
-        const along = alongOf(other);
-        if (Math.abs(lateral) < 34 && along > 0 && along < 80) {
-          creepTarget = Math.min(creepTarget, Math.max(0, (along - 52) * 4));
-        }
-      }
-      targetSpeed = Math.min(creepTarget, pedTarget);
+      targetSpeed = Math.min(creepScan(g, car, myLat), pedTarget);
     }
     car.speed += Math.max(-260 * dt, Math.min(200 * dt, targetSpeed - car.speed));
     const along = (car.axis === 'y' ? car.y : car.x) + car.dir * car.speed * dt;
@@ -1063,19 +1132,18 @@ export function updateTraffic(g, dt) {
         if (g.rng.chance(0.38)) {
           car.off = 0; car.blockedT = 0; car.creepT = 0; // a new lane, a fresh start
           const newDir = g.rng.chance(0.5) ? 1 : -1;
-          const crossRoad = cross;
           if (car.axis === 'y') {
             car.axis = 'x';
-            car.road = crossRoad;
+            car.road = cross;
             car.dir = newDir;
-            car.lane = crossRoad + (newDir > 0 ? 26 : -26);
+            car.lane = cross + (newDir > 0 ? 26 : -26);
             car.y = car.lane;
             car.angle = newDir > 0 ? 0 : Math.PI;
           } else {
             car.axis = 'y';
-            car.road = crossRoad;
+            car.road = cross;
             car.dir = newDir;
-            car.lane = crossRoad + (newDir > 0 ? -26 : 26);
+            car.lane = cross + (newDir > 0 ? -26 : 26);
             car.x = car.lane;
             car.angle = newDir > 0 ? Math.PI / 2 : -Math.PI / 2;
           }
@@ -1096,13 +1164,21 @@ export function updateTraffic(g, dt) {
   separateTrafficCars(g);
 }
 
+/** Re-glue a traffic car to its lane laterally and resolve it out of buildings. */
+function reglueToLane(g, car) {
+  if (car.axis === 'y') car.x = car.lane + (car.off ?? 0);
+  else car.y = car.lane + (car.off ?? 0);
+  resolveCircleCollision(g.city, car, CAR.radius);
+  syncCarMesh(car, 0);
+}
+
 /**
- * Traffic cars must never REST overlapped. Lane-following alone cannot
- * promise that: two cars can arrive at a crossing together, and a
- * turning car snaps laterally onto its new lane in one frame — the
- * user's screenshot showed four or five cars interpenetrating in one
- * stack at a corner. This pairwise pass runs once per frame after the
- * lane updates (few traffic cars, only nearby pairs considered):
+ * Traffic cars must never REST overlapped. Lane-following alone
+ * cannot promise that: two cars can arrive at a crossing together,
+ * and a turning car snaps laterally onto its new lane in one frame —
+ * the user's screenshot showed four or five cars interpenetrating in
+ * one stack at a corner. This pairwise pass runs once per frame after
+ * the lane updates (few traffic cars, only nearby pairs considered):
  * overlapping cars are pushed apart along their centre line, capped
  * per step so a three-car meeting converges over a few frames instead
  * of exploding, and each pushed traffic car is immediately re-glued
@@ -1139,15 +1215,9 @@ function separateTrafficCars(g) {
         const bPush = Math.min(overlap / 2, 18);
         b.x -= nx * bPush;
         b.y -= ny * bPush;
-        if (b.axis === 'y') b.x = b.lane + (b.off ?? 0);
-        else b.y = b.lane + (b.off ?? 0);
-        resolveCircleCollision(g.city, b, CAR.radius);
-        syncCarMesh(b, 0);
+        reglueToLane(g, b);
       }
-      if (a.axis === 'y') a.x = a.lane + (a.off ?? 0);
-      else a.y = a.lane + (a.off ?? 0);
-      resolveCircleCollision(g.city, a, CAR.radius);
-      syncCarMesh(a, 0);
+      reglueToLane(g, a);
     }
   }
 }
@@ -1234,8 +1304,8 @@ export function updatePoliceLights(car, time) {
   const phase = Math.floor(time * 5 + (Math.abs(car.x) % 4)) % 2 === 0;
   car.lightL.visible = phase;
   car.lightR.visible = !phase;
-  // The bar's bloom follows the same beat, so the red and blue halves take
-  // turns lighting up the street instead of glowing together.
+  // The bar's bloom follows the same beat, so the red and blue halves
+  // take turns lighting up the street instead of glowing together.
   const night = nightLevel();
   const show = !car.wrecked && night > 0.02;
   if (car.glowL) {
