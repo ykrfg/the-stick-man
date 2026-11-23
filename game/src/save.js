@@ -1,21 +1,32 @@
 // Progress saving: money, finished missions, the pistol, the bought gear and
-// wardrobe, the owned cars and the day clock are kept in localStorage so the
-// title screen can offer a Continue. Saving is best effort only — a browser
-// that refuses storage just loses the feature, never the game.
+// wardrobe, the owned cars and the day clock live in localStorage so the title
+// screen can offer a Continue. Saving is best effort only — a browser that
+// refuses storage loses the feature, never the game. Everything read back is
+// validated field by field: a save written by an older build (or edited by
+// hand) loads with defaults standing in for whatever it lacks.
 import { DAY_START, SAVE_KEY } from './config.js';
 
+/** A finite number held inside [min, max]; the fallback when it is not finite. */
+function clampNum(v, fallback, min, max) {
+  return Number.isFinite(v) ? Math.max(min, Math.min(max, v)) : fallback;
+}
+
+/** A finite number kept as it is; null when the saved value is unusable. */
+function finiteOrNull(v) {
+  return Number.isFinite(v) ? v : null;
+}
+
 /**
- * A wardrobe with nothing bought and the first colour. The first four
- * fields are what is WORN right now (the figure's setFit reads them);
- * `own` is what has been BOUGHT (round #23): buying is once-only, and
- * wearing / taking off an owned piece is free everywhere — at the Surf
- * Shack and in the pause screen's CUSTOMIZE panel alike.
+ * A wardrobe with nothing worn and the first colour. The first four fields
+ * are what is WORN right now (the figure's setFit reads them); `own` is what
+ * has been BOUGHT: buying is once-only, and wearing or taking off an owned
+ * piece is free everywhere — at the Surf Shack and in the pause screen's
+ * CUSTOMIZE panel alike.
  */
 export function freshFit() {
-  return {
-    scarf: false, hat: false, shades: false, color: 0,
-    own: { scarf: false, hat: false, shades: false },
-  };
+  const fit = { scarf: false, hat: false, shades: false, color: 0 };
+  fit.own = { scarf: false, hat: false, shades: false };
+  return fit;
 }
 
 /** Ammo Hut gear with nothing bought. */
@@ -24,11 +35,14 @@ export function freshGear() {
 }
 
 /**
- * A brand-new progress object. `clock` starts at noon; the owned list is empty.
- * Both save and reset build on this so every field exists from the first frame.
+ * A brand-new progress object. `clock` starts at noon; the owned list is
+ * empty; `lastStolen` is the one record of the last car the player stole and
+ * drove ({ color, x, y, angle } or null — stealing a different car moves it,
+ * a wreck clears it). Save and reset both build on this, so every field
+ * exists from the first frame.
  */
 export function freshSave() {
-  return {
+  const save = {
     money: 0,
     missionsDone: [],
     jobsDone: 0,
@@ -38,60 +52,89 @@ export function freshSave() {
     gear: freshGear(),
     fit: freshFit(),
     owned: [],
-    // The last car the player stole and drove (round #25):
-    // { color, x, y, angle } or null. One record only — stealing a
-    // different car moves it, and a wreck clears it.
-    lastStolen: null,
   };
+  save.lastStolen = null;
+  return save;
 }
 
 /** The recorded last-stolen car, validated: a colour and a finite spot. */
 function cleanStolen(s) {
   if (!s || typeof s !== 'object') return null;
-  if (!Number.isFinite(s.x) || !Number.isFinite(s.y) || !Number.isFinite(s.angle)) return null;
-  return { color: int(s.color, 0, 0, 0xffffff), x: s.x, y: s.y, angle: s.angle };
+  const spot = [s.x, s.y, s.angle];
+  if (spot.some((n) => !Number.isFinite(n))) return null;
+  return { color: clampNum(s.color, 0, 0, 0xffffff), x: s.x, y: s.y, angle: s.angle };
 }
-
-const int = (v, fallback, min, max) => (
-  Number.isFinite(v) ? Math.max(min, Math.min(max, v)) : fallback
-);
 
 /** One owned car, clamped to the grades and upgrade levels that exist. */
 function cleanCar(c) {
   if (!c || typeof c !== 'object') return null;
-  const paint = int(c.paint, 0, 0, 9);
-  // Paint ownership (round #23): the set of colours this car has ever
-  // been painted in. A colour is bought once ($60 at the Motors desk)
-  // and switching back to it is free. Saves from before the set existed
-  // start with just the car's current colour in the set.
+  const paint = clampNum(c.paint, 0, 0, 9);
+  // Paint ownership: the set of colours this car has ever been painted in.
+  // A colour is bought once ($60 at the Motors desk) and switching back to
+  // it is free. Saves from before the set existed start with just the car's
+  // current colour in the set — and the current colour is always in it.
   const paints = [];
   if (Array.isArray(c.paints)) {
     for (const p of c.paints) {
-      const v = int(p, -1, 0, 9);
+      const v = clampNum(p, -1, 0, 9);
       if (v >= 0 && !paints.includes(v)) paints.push(v);
     }
   }
   if (!paints.includes(paint)) paints.push(paint);
-  return {
-    grade: int(c.grade, 0, 0, 2),
+  const car = {
+    grade: clampNum(c.grade, 0, 0, 2),
     paint,
     paints,
-    engine: int(c.engine, 0, 0, 2),
-    armor: int(c.armor, 0, 0, 2),
-    neon: c.neon === null || c.neon === undefined ? null : int(c.neon, null, 0, 4),
-    // Underglow on/off (round #23): the neon colour stays installed;
-    // this is only the switch the pause panel flips. Absent = on.
+    engine: clampNum(c.engine, 0, 0, 2),
+    armor: clampNum(c.armor, 0, 0, 2),
+    // Neon: null when no underglow colour is installed. The glow switch is
+    // separate (the colour stays installed; the pause panel flips only the
+    // switch) and an absent switch means on.
+    neon: c.neon === null || c.neon === undefined ? null : clampNum(c.neon, null, 0, 4),
     glow: c.glow !== false,
     stolen: c.stolen === true,
-    stolenX: Number.isFinite(c.stolenX) ? c.stolenX : null,
-    stolenY: Number.isFinite(c.stolenY) ? c.stolenY : null,
-    // Last place the player left this car (round #25): where it spawns
-    // on the next load, heading included. Null until the car has been
-    // in the world under the new build — a car without a recorded spot
-    // (every car in an older save) keeps the Motors-lot spawn.
-    posX: Number.isFinite(c.posX) ? c.posX : null,
-    posY: Number.isFinite(c.posY) ? c.posY : null,
-    posA: Number.isFinite(c.posA) ? c.posA : null,
+    stolenX: finiteOrNull(c.stolenX),
+    stolenY: finiteOrNull(c.stolenY),
+  };
+  // Last place the player left this car: where it spawns on the next load,
+  // heading included. Null until the car has been in the world under a build
+  // that records it — a car without a recorded spot (every car in an older
+  // save) keeps the Motors-lot spawn.
+  car.posX = finiteOrNull(c.posX);
+  car.posY = finiteOrNull(c.posY);
+  car.posA = finiteOrNull(c.posA);
+  return car;
+}
+
+/** The saved gear block, with the oldest saves' loose hasPistol folded in. */
+function cleanGear(data, gear) {
+  return {
+    pistol: data.hasPistol === true || gear?.pistol === true,
+    vest: gear ? clampNum(gear.vest, 0, 0, 2) : 0,
+    gloves: gear?.gloves === true,
+    shoes: gear?.shoes === true,
+  };
+}
+
+/**
+ * The saved wardrobe block. Old saves have no `own`: whatever was worn at
+ * the time counts as owned (a piece that had been bought and taken off in
+ * an old save comes back as unowned — the worn state was the only record
+ * those saves kept).
+ */
+function cleanFit(fit) {
+  const worn = (k) => fit?.[k] === true;
+  const ownedBefore = (k) => fit?.own === undefined && worn(k);
+  return {
+    scarf: worn('scarf'),
+    hat: worn('hat'),
+    shades: worn('shades'),
+    color: fit ? clampNum(fit.color, 0, 0, 4) : 0,
+    own: {
+      scarf: fit?.own?.scarf === true || ownedBefore('scarf'),
+      hat: fit?.own?.hat === true || ownedBefore('hat'),
+      shades: fit?.own?.shades === true || ownedBefore('shades'),
+    },
   };
 }
 
@@ -101,48 +144,29 @@ function cleanCar(c) {
  * no purchases, an empty wardrobe, and a noon start.
  */
 export function loadSave() {
+  let data;
   try {
     const raw = window.localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (typeof data !== 'object' || data === null) return null;
-    const base = freshSave();
-    const gear = data.gear && typeof data.gear === 'object' ? data.gear : null;
-    const fit = data.fit && typeof data.fit === 'object' ? data.fit : null;
-    return {
-      money: Number.isFinite(data.money) ? data.money : 0,
-      missionsDone: Array.isArray(data.missionsDone) ? data.missionsDone.filter((n) => Number.isInteger(n)) : [],
-      jobsDone: Number.isFinite(data.jobsDone) ? data.jobsDone : 0,
-      earned: Number.isFinite(data.earned) ? data.earned : 0,
-      clock: Number.isFinite(data.clock) ? data.clock : base.clock,
-      safehouse: data.safehouse === true,
-      gear: {
-        pistol: data.hasPistol === true || gear?.pistol === true,
-        vest: gear ? int(gear.vest, 0, 0, 2) : 0,
-        gloves: gear?.gloves === true,
-        shoes: gear?.shoes === true,
-      },
-      fit: {
-        scarf: fit?.scarf === true,
-        hat: fit?.hat === true,
-        shades: fit?.shades === true,
-        color: fit ? int(fit.color, 0, 0, 4) : 0,
-        // Ownership (round #23). Old saves have no `own`: whatever was
-        // worn at the time counts as owned (a piece that had been bought
-        // and taken off in an old save comes back as unowned — the worn
-        // state was the only record those saves kept).
-        own: {
-          scarf: fit?.own?.scarf === true || (fit?.own === undefined && fit?.scarf === true),
-          hat: fit?.own?.hat === true || (fit?.own === undefined && fit?.hat === true),
-          shades: fit?.own?.shades === true || (fit?.own === undefined && fit?.shades === true),
-        },
-      },
-      owned: Array.isArray(data.owned) ? data.owned.map(cleanCar).filter(Boolean) : [],
-      lastStolen: cleanStolen(data.lastStolen),
-    };
+    data = JSON.parse(raw);
   } catch {
     return null;
   }
+  if (typeof data !== 'object' || data === null) return null;
+  const gear = data.gear && typeof data.gear === 'object' ? data.gear : null;
+  const fit = data.fit && typeof data.fit === 'object' ? data.fit : null;
+  const save = freshSave();
+  save.money = Number.isFinite(data.money) ? data.money : 0;
+  save.missionsDone = Array.isArray(data.missionsDone) ? data.missionsDone.filter((n) => Number.isInteger(n)) : [];
+  save.jobsDone = Number.isFinite(data.jobsDone) ? data.jobsDone : 0;
+  save.earned = Number.isFinite(data.earned) ? data.earned : 0;
+  save.clock = Number.isFinite(data.clock) ? data.clock : save.clock;
+  save.safehouse = data.safehouse === true;
+  save.gear = cleanGear(data, gear);
+  save.fit = cleanFit(fit);
+  save.owned = Array.isArray(data.owned) ? data.owned.map(cleanCar).filter(Boolean) : [];
+  save.lastStolen = cleanStolen(data.lastStolen);
+  return save;
 }
 
 /** Write the progress object (the same shape loadSave returns). */
@@ -156,14 +180,13 @@ export function storeSave(data) {
 
 /** True when a save object holds anything worth continuing (or wiping). */
 export function hasProgress(data) {
-  return !!data && (
-    data.money > 0
+  if (!data) return false;
+  return data.money > 0
     || (Array.isArray(data.missionsDone) && data.missionsDone.length > 0)
     || data.gear?.pistol === true
     || data.safehouse === true
     || data.earned > 0
-    || (Array.isArray(data.owned) && data.owned.length > 0)
-  );
+    || (Array.isArray(data.owned) && data.owned.length > 0);
 }
 
 /** Forget all progress (the title screen's New Game). */

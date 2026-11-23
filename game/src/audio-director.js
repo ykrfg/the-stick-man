@@ -17,6 +17,8 @@ const TRACKS = {
   chase: 'audio/bgm_chase.ogg',
 };
 
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
 let game = null;
 let bgm = 0.7;
 let se = 1;
@@ -27,13 +29,14 @@ let prev = null;
 const nodes = {};
 
 function readVolumes() {
+  let raw = null;
   try {
-    const raw = JSON.parse(window.localStorage.getItem(VOL_KEY) || 'null');
-    if (raw && Number.isFinite(raw.bgm)) bgm = Math.max(0, Math.min(1, raw.bgm));
-    if (raw && Number.isFinite(raw.se)) se = Math.max(0, Math.min(1, raw.se));
+    raw = JSON.parse(window.localStorage.getItem(VOL_KEY) || 'null');
   } catch {
     /* defaults stand */
   }
+  if (raw && Number.isFinite(raw.bgm)) bgm = clamp01(raw.bgm);
+  if (raw && Number.isFinite(raw.se)) se = clamp01(raw.se);
 }
 
 function storeVolumes() {
@@ -44,25 +47,28 @@ function storeVolumes() {
   }
 }
 
-function makeNode(name) {
-  const el = new window.Audio(TRACKS[name]);
-  el.dataset.name = name;
-  el.loop = true;
-  el.preload = 'auto';
-  el.volume = 0;
-  nodes[name] = el;
-  return el;
+function nodeFor(name) {
+  if (!nodes[name]) {
+    const el = new window.Audio(TRACKS[name]);
+    el.dataset.name = name;
+    el.loop = true;
+    el.preload = 'auto';
+    el.volume = 0;
+    nodes[name] = el;
+  }
+  return nodes[name];
+}
+
+function playQuietly(el) {
+  el.play().catch(() => {});
 }
 
 /* ---------------------------------------------------------------- sliders */
 
-let panel = null;
-let bgmInput = null;
-let seInput = null;
-let lastShown = null;
+const panelRefs = { panel: null, bgmInput: null, seInput: null, shown: null };
 
 function buildPanel() {
-  if (panel) return;
+  if (panelRefs.panel) return;
   if (!document.getElementById('smVolStyle')) {
     const style = document.createElement('style');
     style.id = 'smVolStyle';
@@ -78,40 +84,47 @@ function buildPanel() {
     `;
     document.head.appendChild(style);
   }
-  panel = document.createElement('div');
+  const panel = document.createElement('div');
   panel.id = 'smVol';
   panel.innerHTML = `
     <label><span id="smVolBgmLabel"></span><input id="smVolBgm" type="range" min="0" max="100" step="1"></label>
     <label><span id="smVolSeLabel"></span><input id="smVolSe" type="range" min="0" max="100" step="1"></label>`;
   document.body.appendChild(panel);
-  bgmInput = panel.querySelector('#smVolBgm');
-  seInput = panel.querySelector('#smVolSe');
-  bgmInput.value = String(Math.round(bgm * 100));
-  seInput.value = String(Math.round(se * 100));
-  bgmInput.addEventListener('input', () => setBgmVolume(Number(bgmInput.value) / 100));
-  seInput.addEventListener('input', () => {
-    const v = Number(seInput.value) / 100;
+  panelRefs.panel = panel;
+  panelRefs.bgmInput = panel.querySelector('#smVolBgm');
+  panelRefs.seInput = panel.querySelector('#smVolSe');
+  panelRefs.bgmInput.value = String(Math.round(bgm * 100));
+  panelRefs.seInput.value = String(Math.round(se * 100));
+  panelRefs.bgmInput.addEventListener('input', () => setBgmVolume(Number(panelRefs.bgmInput.value) / 100));
+  panelRefs.seInput.addEventListener('input', () => {
+    const v = Number(panelRefs.seInput.value) / 100;
     if (game) setSeVolume(v, game);
     else setSeVolume(v);
   });
 }
 
+function setLabel(el, key) {
+  const text = t(key);
+  if (el.textContent !== text) el.textContent = text;
+}
+
+function setSlider(input, value) {
+  if (document.activeElement !== input) input.value = String(Math.round(value * 100));
+}
+
 function syncPanel() {
+  const { panel, bgmInput, seInput } = panelRefs;
   if (!panel || !game) return;
   const show = game.state === 'title' || game.state === 'paused';
-  if (show !== lastShown) {
-    lastShown = show;
+  if (show !== panelRefs.shown) {
+    panelRefs.shown = show;
     panel.classList.toggle('show', show);
   }
   if (!show) return;
-  const bl = panel.querySelector('#smVolBgmLabel');
-  const sl = panel.querySelector('#smVolSeLabel');
-  const bt = t('audio.bgm');
-  const st = t('audio.se');
-  if (bl.textContent !== bt) bl.textContent = bt;
-  if (sl.textContent !== st) sl.textContent = st;
-  if (document.activeElement !== bgmInput) bgmInput.value = String(Math.round(bgm * 100));
-  if (document.activeElement !== seInput) seInput.value = String(Math.round(se * 100));
+  setLabel(panel.querySelector('#smVolBgmLabel'), 'audio.bgm');
+  setLabel(panel.querySelector('#smVolSeLabel'), 'audio.se');
+  setSlider(bgmInput, bgm);
+  setSlider(seInput, se);
 }
 
 /* ------------------------------------------------------------------- core */
@@ -126,13 +139,14 @@ export function initAudio(g) {
     if (unlocked) return;
     unlocked = true;
     g.sfx.unlock();
-    if (want && !current) current = nodes[want] || makeNode(want);
-    if (current) current.play().catch(() => {});
+    if (want && !current) current = nodeFor(want);
+    if (current) playQuietly(current);
   };
   window.addEventListener('pointerdown', start);
   window.addEventListener('keydown', start);
 }
 
+/** Which track the run's mood calls for right now. */
 function choose(g) {
   if (g.state === 'title' || g.state === 'paused') return 'title';
   if (g.stars >= 2) return 'chase';
@@ -146,9 +160,17 @@ function begin(name) {
   if (current && current.dataset.name === name) return;
   if (prev && prev !== current) prev.pause();
   prev = current;
-  current = nodes[name] || makeNode(name);
+  current = nodeFor(name);
   current.volume = 0;
-  if (unlocked) current.play().catch(() => {});
+  if (unlocked) playQuietly(current);
+}
+
+/** Ease one fading-out node toward silence; retire it when it gets there. */
+function fadeOut(node, step) {
+  node.volume = Math.max(0, node.volume - step * 0.9);
+  if (node.volume > 0.01) return node;
+  node.pause();
+  return null;
 }
 
 /** Frame hook: pick the track, crossfade, and follow the sliders. */
@@ -156,8 +178,8 @@ export function updateAudio(g, dt) {
   game = g;
   want = choose(g);
   if (!current) {
-    current = nodes[want] || makeNode(want);
-    if (unlocked) current.play().catch(() => {});
+    current = nodeFor(want);
+    if (unlocked) playQuietly(current);
   } else if (current.dataset.name !== want) {
     begin(want);
   }
@@ -165,30 +187,24 @@ export function updateAudio(g, dt) {
   const step = Math.min(1, dt * 1.8);
   if (current) {
     const target = unlocked ? bgm : 0;
-    current.volume = Math.max(0, Math.min(1, current.volume + (target - current.volume) * step));
+    current.volume = clamp01(current.volume + (target - current.volume) * step);
     if (g.sfx.muted) current.volume = 0;
   }
-  if (prev) {
-    prev.volume = Math.max(0, prev.volume - step * 0.9);
-    if (prev.volume <= 0.01) {
-      prev.pause();
-      prev = null;
-    }
-  }
+  if (prev) prev = fadeOut(prev, step);
 }
 
 /** Music volume 0..1 (persisted). */
 export function setBgmVolume(v) {
-  bgm = Math.max(0, Math.min(1, v));
+  bgm = clamp01(v);
   storeVolumes();
-  if (bgmInput) bgmInput.value = String(Math.round(bgm * 100));
+  if (panelRefs.bgmInput) panelRefs.bgmInput.value = String(Math.round(bgm * 100));
 }
 
 /** Sound-effect volume 0..1 (persisted, applied to the SE bus). */
 export function setSeVolume(v, g) {
-  se = Math.max(0, Math.min(1, v));
+  se = clamp01(v);
   storeVolumes();
-  if (seInput) seInput.value = String(Math.round(se * 100));
+  if (panelRefs.seInput) panelRefs.seInput.value = String(Math.round(se * 100));
   if (g) g.sfx.setSeVolume(se);
 }
 

@@ -1,11 +1,12 @@
-// The story: six jobs for Bruno, the black stick figure who runs Bruno's Diner
-// and half the errands in Palmera. Walk up to Bruno and press E to take the next
-// job. Each mission drives a gold marker (red while someone has to be beaten),
-// pays cash, and unlocks the next; the pistol arrives with the second job. The
-// back three jobs mix the tools together — fists and a marked car (REPO JOB),
-// a moving courier car stopped by crash damage and its crew (COURIER HIT), and
-// a timed drive into a two-wave warehouse fight (WAREHOUSE RAID). Failing
-// (busted or wasted) sends the player back to Bruno to try again.
+// missions.js — Bruno's work: the six-job story chain and, once it is
+// finished, his repeatable odd jobs. Bruno runs the diner on the north
+// side and half the errands in Palmera; every job starts at his counter,
+// drives a gold marker (red while a fight is owed), pays through the JOB
+// DONE banner and unlocks the next. The back half of the chain mixes the
+// toolbox: fists around a marked car, a moving courier stopped by crash
+// damage, and a timed warehouse raid with two waves. Being busted or
+// wasted collapses whatever is running and sends the player back to
+// Bruno to try again.
 import { HEAT_THRESHOLDS, RAID_TIME_BONUS, RAID_TIMER } from './config.js';
 import { makeMarker } from './world3d.js';
 import { removePed, spawnPed } from './people.js';
@@ -13,36 +14,32 @@ import { driveCourier, removeCar, spawnCar, spawnCourierCar } from './vehicles.j
 import { addHeat } from './police.js';
 import { t } from './i18n.js';
 
-/** The six chained story missions, in order (titles/intros live in i18n.js). */
-const MISSION_COUNT = 6;
+const STORY_LENGTH = 6;
+
 export function missionTitle(index) {
   return t(`mission.${index}.title`);
 }
+
 function missionIntro(index) {
   return t(`mission.${index}.intro`);
 }
 
+/** Fresh mission/job state plus the three markers (objective gold, objective red, diner). */
 export function missionsInit(g) {
+  const done = (g.saveData.missionsDone ?? []).length;
   g.mission = {
-    index: Math.min(MISSION_COUNT, (g.saveData.missionsDone ?? []).length),
+    index: Math.min(STORY_LENGTH, done),
     active: false,
     phase: '',
     shopStep: 0,
     rivals: [],
     shade: null,
-    // Missions 4–6 state: the REPO JOB's marked car and its guards, the
-    // COURIER HIT car, and the WAREHOUSE RAID's second wave (posted at
-    // accept time, swapped into `rivals` when the door guards fall) and
-    // its opening-drive clock.
     targetCar: null,
     courier: null,
     yardMen: [],
     timer: 0,
     timeBonus: false,
   };
-  // Bruno's odd jobs: the free-roam work loop, unlocked once the story is
-  // done. Same shape as a mission (marker, phases, JOB DONE payoff) but
-  // repeatable forever, with a fresh destination every time.
   g.job = {
     active: false,
     type: '',
@@ -59,81 +56,70 @@ export function missionsInit(g) {
   g.markerGold.visible = false;
   g.markerRed.visible = false;
   g.scene.add(g.markerGold, g.markerRed);
-  // The diner marker: a persistent SECONDARY marker for Bruno's Diner,
-  // independent of the objective — shorter column, its own orange, and a
-  // DINER tag instead of the objective's "!". Home base stays findable
-  // mid-mission; syncDinerMarker below owns its visibility (it steps
-  // aside whenever the objective itself is Bruno/the diner, and it never
-  // appears in ?shot= scenes).
+  // The diner keeps its own permanent marker — shorter, orange, tagged
+  // DINER — so home base stays findable mid-mission. syncDinerMarker
+  // owns when it shows.
+  const diner = g.city.landmarks.diner;
   g.markerDiner = makeMarker(0xff9f43, t('marker.diner'), { height: 58, spriteColor: '#ffb25e', spriteScale: 0.95 });
-  const dinerSpot = g.city.landmarks.diner;
-  g.markerDiner.position.set(dinerSpot.x, 0, dinerSpot.y);
+  g.markerDiner.position.set(diner.x, 0, diner.y);
   g.markerDiner.visible = false;
   g.scene.add(g.markerDiner);
 }
 
+export function missionAvailable(g) {
+  return !g.mission.active && g.mission.index < STORY_LENGTH;
+}
+
+export function jobAvailable(g) {
+  return !g.mission.active && !g.job.active && g.mission.index >= STORY_LENGTH;
+}
+
+// --- marker plumbing -------------------------------------------------------
+
+function goldAt(g, x, y) {
+  g.markerGold.visible = true;
+  g.markerGold.position.set(x, 0, y);
+  g.markerRed.visible = false;
+}
+
+function redAt(g, x, y) {
+  g.markerRed.visible = true;
+  g.markerRed.position.set(x, 0, y);
+  g.markerGold.visible = false;
+}
+
+function markersOff(g) {
+  g.markerGold.visible = false;
+  g.markerRed.visible = false;
+}
+
 /**
- * The diner marker's one visibility rule, applied every frame: shown
- * whenever play is live and the current objective is somewhere else.
- * When the objective target IS Bruno/the diner (waiting for work, the
- * return leg), the gold marker there already says it — showing both
- * would double up on the same doorstep. In ?shot= mode the marker stays
- * hidden so the deterministic scenes render exactly as before.
+ * The diner marker shows whenever play is live and the objective is
+ * somewhere else; when the objective IS Bruno's doorstep the gold
+ * marker already says so, and in ?shot= scenes it never appears.
  */
 function syncDinerMarker(g, time) {
   const d = g.markerDiner;
   if (!d) return;
   d.userData.update(time);
   if (g.shotMode) { d.visible = false; return; }
-  const L = g.city.landmarks;
+  const diner = g.city.landmarks.diner;
   const target = objectiveTarget(g);
-  d.visible = !(target && Math.hypot(target.x - L.diner.x, target.y - L.diner.y) < 90);
+  d.visible = !(target && Math.hypot(target.x - diner.x, target.y - diner.y) < 90);
 }
 
-export function missionAvailable(g) {
-  return !g.mission.active && g.mission.index < MISSION_COUNT;
-}
+// --- posting men (always at accept/advance time, never on arrival) --------
 
-function setMarker(g, marker, x, y) {
-  marker.visible = true;
-  marker.position.set(x, 0, y);
-}
-
-function hideMarkers(g) {
-  g.markerGold.visible = false;
-  g.markerRed.visible = false;
-}
-
-/**
- * Post the current shop's collectors at its door. Called when the step
- * becomes current — when the job is accepted and on each advance — never
- * when the player arrives: two black figures loitering at the shopfront
- * are part of the approach the player can see coming, not a pair of
- * enemies materializing the instant the fight step triggers.
- */
-function postCollectors(g) {
-  const m = g.mission;
-  const shop = g.city.shops[m.shopStep];
-  if (!shop) return;
-  m.rivals = [
-    spawnPed(g, { role: 'rival', x: shop.x + 30, y: shop.y - 16, shopIndex: m.shopStep }),
-    spawnPed(g, { role: 'rival', x: shop.x - 26, y: shop.y + 22, shopIndex: m.shopStep }),
+function postPair(g, shop, shopIndex) {
+  const men = [
+    spawnPed(g, { role: 'rival', x: shop.x + 30, y: shop.y - 16, shopIndex }),
+    spawnPed(g, { role: 'rival', x: shop.x - 26, y: shop.y + 22, shopIndex }),
   ];
-  for (const rival of m.rivals) rival.state = 'idle';
+  for (const man of men) man.state = 'idle';
+  return men;
 }
 
-/**
- * REPO JOB set-up, at accept time: the debtor's gold car parked on the
- * avenue curb behind the Ammo Hut, and his two guards posted beside it.
- * Everything exists from the moment Bruno hands the job out — the
- * approach shows a guarded car, never a pop-in. The car is extra tough,
- * and while the job runs it cannot be wrecked at all (damageCar in
- * vehicles.js floors the marked car's hp at 1): a wrecked objective
- * car could never be driven to the pier and the job would soft-lock,
- * so the wreck itself is withheld — impacts still shove it, slow it
- * and bill its hp down to the floor. The protection is this job's
- * alone, and it ends the moment the job does.
- */
+/** REPO JOB: the debtor's gold car on the curb behind the Ammo Hut, guards beside it. */
 function postRepoJob(g) {
   const m = g.mission;
   let y = 2300;
@@ -151,77 +137,75 @@ function postRepoJob(g) {
   for (const rival of m.rivals) rival.state = 'idle';
 }
 
-/**
- * WAREHOUSE RAID set-up, at accept time: two door guards at the
- * warehouse's south face and the three-man yard crew behind them, all
- * posted while the player is still at the diner. The yard crew waits in
- * `yardMen` (idle) until the door fight ends; only then do they become
- * the mission's `rivals` and wake.
- */
+/** WAREHOUSE RAID: door guards on the south face, the yard crew waiting behind them. */
 function postRaid(g) {
   const m = g.mission;
-  const L = g.city.landmarks;
+  const pier = g.city.landmarks.pier;
   m.rivals = [
-    spawnPed(g, { role: 'rival', x: L.pier.x - 40, y: L.pier.y - 28 }),
-    spawnPed(g, { role: 'rival', x: L.pier.x + 42, y: L.pier.y - 28 }),
+    spawnPed(g, { role: 'rival', x: pier.x - 40, y: pier.y - 28 }),
+    spawnPed(g, { role: 'rival', x: pier.x + 42, y: pier.y - 28 }),
   ];
   m.yardMen = [
-    spawnPed(g, { role: 'rival', x: L.pier.x - 92, y: L.pier.y + 22, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
-    spawnPed(g, { role: 'rival', x: L.pier.x, y: L.pier.y + 38, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
-    spawnPed(g, { role: 'rival', x: L.pier.x + 92, y: L.pier.y + 22, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
+    spawnPed(g, { role: 'rival', x: pier.x - 92, y: pier.y + 22, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
+    spawnPed(g, { role: 'rival', x: pier.x, y: pier.y + 38, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
+    spawnPed(g, { role: 'rival', x: pier.x + 92, y: pier.y + 22, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
   ];
   for (const ped of [...m.rivals, ...m.yardMen]) ped.state = 'idle';
 }
 
-/** The cash crate's spot for the raid: just south of the warehouse doors. */
 function crateSpot(g) {
-  const L = g.city.landmarks;
-  return { x: L.pier.x, y: L.pier.y - 35 };
+  const pier = g.city.landmarks.pier;
+  return { x: pier.x, y: pier.y - 35 };
 }
 
+// --- fight bookkeeping ------------------------------------------------------
+
 /**
- * A rival counts as beaten when he is actually down for good — hp at
- * zero — or already gone from the world. 'down' ALONE is not beaten:
- * a car knockdown (runOverPed) puts a fighter down with hp to spare
- * and he stands back up after ~2.6 s; counting the state let a single
- * drive through a clustered wave "win" the fight, and the phase
- * cleanup then removed the living men (round #22 bug: the raid's
- * elites vanished when their cars met the player's). For rivals,
- * hp <= 0 is exactly the down that never gets up — hurtPed sets
- * 'down' only at hp <= 0, and the knockdown keeps hp > 0. The
- * absence clause stays (round #14): the only way a posted man leaves
- * g.peds mid-mission is the down-timer in updatePeds sweeping a body
- * at hp <= 0 (or the mission's own cleanup, which runs after the
- * count), so an absent rival is a beaten one; counting only hp would
- * leave a wave short a man it can never produce again.
+ * Beaten means down for good (hp <= 0) or already swept from the world.
+ * A plain 'down' state is NOT beaten: a car knockdown puts a fighter
+ * down with hp to spare and he gets back up, and counting the state
+ * once let a single drive through a wave "win" the fight and vanish
+ * living men in the cleanup.
  */
 function rivalBeaten(g, r) {
   return r.hp <= 0 || !g.peds.includes(r);
 }
 
-/**
- * The raid fight's living target: the nearest rival still standing.
- * The door and yard waves are posted at accept time and fight where
- * they stand, so during those two phases the objective — marker,
- * minimap blip and distance readout alike — stands on this man, not
- * on the warehouse doorstep the drive pointed at: a survivor knocked
- * across the yard is where the fight actually is.
- */
+function allBeaten(g, rivals) {
+  return rivals.every((r) => rivalBeaten(g, r));
+}
+
+/** Wake only the men still idling — a man already down stays down. */
+function wakeRivals(rivals) {
+  for (const r of rivals) if (r.state === 'idle') r.state = 'fight';
+}
+
+function clearRivals(g, holder) {
+  for (const r of holder.rivals) removePed(g, r);
+  holder.rivals = [];
+}
+
+/** The nearest rival still standing — where a fight objective actually is. */
 function nearestStandingRival(g) {
   let best = null;
   let bestD = Infinity;
   for (const r of g.mission.rivals) {
     if (rivalBeaten(g, r)) continue;
     const d = Math.hypot(r.x - g.player.x, r.y - g.player.y);
-    if (d < bestD) {
-      bestD = d;
-      best = r;
-    }
+    if (d < bestD) { bestD = d; best = r; }
   }
   return best;
 }
 
-/** Start the current mission (the player talked to Bruno). */
+/** Force the heat up to a scripted star count (the law "notices" the job). */
+function scriptedHeat(g, stars) {
+  const need = HEAT_THRESHOLDS[stars - 1] + 5 - g.heat;
+  if (need > 0) addHeat(g, need, g.player.x, g.player.y, { force: true });
+}
+
+// --- taking work -------------------------------------------------------------
+
+/** Start the current story mission (the player talked to Bruno). */
 export function acceptMission(g) {
   const m = g.mission;
   if (!missionAvailable(g)) return;
@@ -229,76 +213,58 @@ export function acceptMission(g) {
   m.shopStep = 0;
   m.rivals = [];
   const L = g.city.landmarks;
-  if (m.index === 0) {
-    m.phase = 'toWarehouse';
-  } else if (m.index === 1) {
-    m.phase = 'toClub';
-    // Shade exists from the moment the job is taken: he waits at the club
-    // door the whole approach, so arriving reveals a man, not a spawn.
-    m.shade = spawnPed(g, { role: 'shade', x: L.club.x + 24, y: L.club.y + 10, name: 'SHADE' });
-    m.shade.fig.setExpression('angry');
-    m.shade.state = 'idle';
-    // His post: Shade is essential like Bruno (people.js isEssential),
-    // and the idle post-keeping walks him back here if anything ever
-    // shoves him off the club door.
-    m.shade.homeX = m.shade.x;
-    m.shade.homeY = m.shade.y;
-  } else if (m.index === 2) {
-    m.phase = 'toShop';
-    postCollectors(g);
-  } else if (m.index === 3) {
-    m.phase = 'toCar';
-    postRepoJob(g);
-  } else if (m.index === 4) {
-    m.phase = 'intercept';
-    // The courier is already looping the city when Bruno names it.
-    m.courier = spawnCourierCar(g);
-  } else {
-    m.phase = 'raidDrive';
-    m.timer = RAID_TIMER;
-    m.timeBonus = true;
-    postRaid(g);
+  switch (m.index) {
+    case 0:
+      m.phase = 'toWarehouse';
+      break;
+    case 1:
+      m.phase = 'toClub';
+      // Shade waits at the club door from this moment on — arriving
+      // reveals a man who was already there, never a spawn-in.
+      m.shade = spawnPed(g, { role: 'shade', x: L.club.x + 24, y: L.club.y + 10, name: 'SHADE' });
+      m.shade.fig.setExpression('angry');
+      m.shade.state = 'idle';
+      m.shade.homeX = m.shade.x;
+      m.shade.homeY = m.shade.y;
+      break;
+    case 2:
+      m.phase = 'toShop';
+      m.rivals = postPair(g, g.city.shops[0], 0);
+      break;
+    case 3:
+      m.phase = 'toCar';
+      postRepoJob(g);
+      break;
+    case 4:
+      m.phase = 'intercept';
+      m.courier = spawnCourierCar(g);
+      break;
+    default:
+      m.phase = 'raidDrive';
+      m.timer = RAID_TIMER;
+      m.timeBonus = true;
+      postRaid(g);
+      break;
   }
   g.say(missionTitle(m.index), missionIntro(m.index), 5.5);
   g.events.push({ type: 'missionstart' });
 }
 
-// ---------------------------------------------------------------------------
-// Bruno's odd jobs — the free-roam earning loop. Unlocked only once the
-// story missions are done, so Bruno's counter never has two kinds of work
-// competing: while a story job exists it is always offered first. The two
-// kinds alternate (after a coin-flip first pick), each run is short, pays
-// through the same JOB DONE banner as the story, and counts into the same
-// earned/save totals.
-// ---------------------------------------------------------------------------
+// Bruno's odd jobs: the free-roam earning loop, unlocked only once the
+// story is done so the two kinds of work never compete at his counter.
+// Deliveries and collections alternate (coin flip for the first), each
+// pays through the same JOB DONE banner and counts into the same totals.
 
-export function jobAvailable(g) {
-  return !g.mission.active && !g.job.active && g.mission.index >= MISSION_COUNT;
-}
-
-/** Named places a delivery can start and end at: landmarks plus the shops. */
 function jobPlaces(g) {
   const L = g.city.landmarks;
-  return [
-    { name: 'the Pier Warehouse', x: L.pier.x, y: L.pier.y },
-    { name: 'Club Neon', x: L.club.x, y: L.club.y },
-    { name: 'St. Palm Hospital', x: L.hospital.x, y: L.hospital.y },
-    { name: 'the Ammo Hut', x: L.ammo.x, y: L.ammo.y },
-    { name: "Spray 'n Go", x: L.spray.x, y: L.spray.y },
-    ...g.city.shops.map((s) => ({ name: s.name, x: s.x, y: s.y })),
-  ];
-}
-
-/** Post a job collection's two collectors at their shop door, at accept time. */
-function postJobCollectors(g) {
-  const j = g.job;
-  const shop = g.city.shops[j.shopIndex];
-  if (!shop) return;
-  j.rivals = [
-    spawnPed(g, { role: 'rival', x: shop.x + 30, y: shop.y - 16, shopIndex: j.shopIndex }),
-    spawnPed(g, { role: 'rival', x: shop.x - 26, y: shop.y + 22, shopIndex: j.shopIndex }),
-  ];
-  for (const rival of j.rivals) rival.state = 'idle';
+  const named = [
+    ['the Pier Warehouse', L.pier],
+    ['Club Neon', L.club],
+    ['St. Palm Hospital', L.hospital],
+    ['the Ammo Hut', L.ammo],
+    ["Spray 'n Go", L.spray],
+  ].map(([name, spot]) => ({ name, x: spot.x, y: spot.y }));
+  return named.concat(g.city.shops.map((s) => ({ name: s.name, x: s.x, y: s.y })));
 }
 
 /** Start the next odd job (the player talked to Bruno in free roam). */
@@ -307,11 +273,9 @@ export function acceptJob(g) {
   if (!jobAvailable(g)) return;
   j.active = true;
   j.rivals = [];
-  j.type = j.lastType === 'delivery'
-    ? 'collection'
-    : j.lastType === 'collection'
-      ? 'delivery'
-      : (g.rng.chance(0.5) ? 'delivery' : 'collection');
+  if (j.lastType === 'delivery') j.type = 'collection';
+  else if (j.lastType === 'collection') j.type = 'delivery';
+  else j.type = g.rng.chance(0.5) ? 'delivery' : 'collection';
   if (j.type === 'delivery') {
     const places = jobPlaces(g);
     const a = g.rng.int(0, places.length - 1);
@@ -320,16 +284,14 @@ export function acceptJob(g) {
     j.from = places[a];
     j.to = places[b];
     j.phase = 'toPickup';
-    j.reward = 5 * g.rng.int(18, 28); // $90–140
+    j.reward = 5 * g.rng.int(18, 28);
     g.say(t('job.delivery.title'), t('job.delivery.sub', { from: j.from.name, to: j.to.name, reward: `$${j.reward}` }), 5.5);
   } else {
     j.shopIndex = g.rng.int(0, g.city.shops.length - 1);
     const shop = g.city.shops[j.shopIndex];
     j.phase = 'toShop';
-    j.reward = 5 * g.rng.int(24, 36); // $120–180
-    // Posted NOW, while the player is still at the diner: the approach
-    // shows two men waiting at the shopfront, never a pop-in at the door.
-    postJobCollectors(g);
+    j.reward = 5 * g.rng.int(24, 36);
+    j.rivals = postPair(g, shop, j.shopIndex);
     g.say(t('job.collection.title'), t('job.collection.sub', { shop: shop.name, reward: `$${j.reward}` }), 5.5);
   }
   g.events.push({ type: 'missionstart' });
@@ -340,7 +302,7 @@ function completeJob(g, line) {
   j.active = false;
   j.phase = '';
   j.lastType = j.type;
-  hideMarkers(g);
+  markersOff(g);
   g.money += j.reward;
   g.earned += j.reward;
   g.saveData.jobsDone = (g.saveData.jobsDone ?? 0) + 1;
@@ -356,47 +318,42 @@ function updateJob(g) {
   const near = (x, y, r) => Math.hypot(p.x - x, p.y - y) < r;
   if (j.type === 'delivery') {
     if (j.phase === 'toPickup') {
-      setMarker(g, g.markerGold, j.from.x, j.from.y);
-      g.markerRed.visible = false;
+      goldAt(g, j.from.x, j.from.y);
       if (near(j.from.x, j.from.y, 56)) {
         j.phase = 'toDropoff';
         g.say(t('say.packageSecured.title'), t('say.packageSecured.job', { place: j.to.name }), 3);
         g.events.push({ type: 'pickup' });
       }
     } else if (j.phase === 'toDropoff') {
-      setMarker(g, g.markerGold, j.to.x, j.to.y);
-      g.markerRed.visible = false;
-      if (near(j.to.x, j.to.y, 56)) {
-        completeJob(g, t('say.jobDone.delivery'));
-      }
+      goldAt(g, j.to.x, j.to.y);
+      if (near(j.to.x, j.to.y, 56)) completeJob(g, t('say.jobDone.delivery'));
     }
-  } else if (j.type === 'collection') {
-    const shop = g.city.shops[j.shopIndex];
-    if (!shop) return;
-    if (j.phase === 'toShop') {
-      setMarker(g, g.markerGold, shop.x, shop.y);
-      g.markerRed.visible = false;
-      if (near(shop.x, shop.y, 52) && p.state === 'foot') {
-        // The trigger only wakes the men posted at accept time.
-        j.phase = 'fight';
-        for (const rival of j.rivals) if (rival.state === 'idle') rival.state = 'fight';
-        g.say(t('say.collectors.title'), t('say.collectors.job'), 3);
-      }
-    } else if (j.phase === 'fight') {
-      setMarker(g, g.markerRed, shop.x, shop.y);
-      g.markerGold.visible = false;
-      if (j.rivals.every((r) => rivalBeaten(g, r))) {
-        for (const rival of j.rivals) removePed(g, rival);
-        j.rivals = [];
-        completeJob(g, t('say.jobDone.collection', { shop: shop.name }));
-      }
+    return;
+  }
+  if (j.type !== 'collection') return;
+  const shop = g.city.shops[j.shopIndex];
+  if (!shop) return;
+  if (j.phase === 'toShop') {
+    goldAt(g, shop.x, shop.y);
+    if (near(shop.x, shop.y, 52) && p.state === 'foot') {
+      j.phase = 'fight';
+      wakeRivals(j.rivals);
+      g.say(t('say.collectors.title'), t('say.collectors.job'), 3);
+    }
+  } else if (j.phase === 'fight') {
+    redAt(g, shop.x, shop.y);
+    if (allBeaten(g, j.rivals)) {
+      clearRivals(g, j);
+      completeJob(g, t('say.jobDone.collection', { shop: shop.name }));
     }
   }
 }
 
+// --- what the HUD points at --------------------------------------------------
+
 /**
- * The current objective line for the HUD ('' when nothing is running). Every
- * step names its PLACE as well as its person — "come back for Shade" alone
+ * The current objective line ('' when nothing is running). Every step
+ * names its PLACE as well as its person — "come back for Shade" alone
  * left players asking who Shade is and where "back" is.
  */
 export function objectiveText(g) {
@@ -415,46 +372,48 @@ export function objectiveText(g) {
         ? t('obj.jobFight', { shop: shopName })
         : t('obj.jobCollect', { shop: shopName });
     }
-    if (m.index >= MISSION_COUNT) return t('obj.freeRoam');
-    return t('obj.talkBruno');
+    return m.index >= STORY_LENGTH ? t('obj.freeRoam') : t('obj.talkBruno');
   }
   const shop = g.city.shops[m.shopStep];
   const shopName = shop ? shop.name : 'the shop';
-  switch (m.phase) {
-    case 'toWarehouse': return t('obj.toWarehouse');
-    case 'returnDiner': return t('obj.returnDiner');
-    case 'toClub': return t('obj.toClub');
-    case 'getCar': return t('obj.getCar');
-    case 'escape': return t('obj.escape');
-    case 'dropoff': return t('obj.dropoff');
-    case 'toShop': return t('obj.toShop', { shop: shopName, step: m.shopStep + 1 });
-    case 'fight': return t('obj.fight', { shop: shopName });
-    case 'toCar': return t('obj.repoGo');
-    case 'repoFight': return t('obj.repoFight');
-    case 'repoSteal': return t('obj.repoSteal');
-    case 'repoDeliver': return t('obj.repoDeliver');
-    case 'intercept': return t('obj.courierIntercept');
-    case 'escortsFight': return t('obj.courierEscorts');
-    case 'grabCase': return t('obj.courierCase');
-    case 'returnBruno': return t('obj.returnBruno');
-    case 'raidDrive': return t('obj.raidDrive', { secs: Math.max(0, Math.ceil(m.timer)) });
-    case 'raidDoor': return t('obj.raidDoor');
-    case 'raidFightDoor': return t('obj.raidDoorFight');
-    case 'raidFightYard': return t('obj.raidYardFight');
-    case 'grabCrate': return t('obj.raidCrate');
-    case 'raidEscapeCar': return t('obj.raidEscapeCar');
-    case 'loseLaw':
-    case 'escapeHeat': return t('obj.escape');
-    default: return '';
-  }
+  const lines = {
+    toWarehouse: () => t('obj.toWarehouse'),
+    returnDiner: () => t('obj.returnDiner'),
+    toClub: () => t('obj.toClub'),
+    getCar: () => t('obj.getCar'),
+    escape: () => t('obj.escape'),
+    dropoff: () => t('obj.dropoff'),
+    toShop: () => t('obj.toShop', { shop: shopName, step: m.shopStep + 1 }),
+    fight: () => t('obj.fight', { shop: shopName }),
+    toCar: () => t('obj.repoGo'),
+    repoFight: () => t('obj.repoFight'),
+    repoSteal: () => t('obj.repoSteal'),
+    repoDeliver: () => t('obj.repoDeliver'),
+    intercept: () => t('obj.courierIntercept'),
+    escortsFight: () => t('obj.courierEscorts'),
+    grabCase: () => t('obj.courierCase'),
+    returnBruno: () => t('obj.returnBruno'),
+    raidDrive: () => t('obj.raidDrive', { secs: Math.max(0, Math.ceil(m.timer)) }),
+    raidDoor: () => t('obj.raidDoor'),
+    raidFightDoor: () => t('obj.raidDoorFight'),
+    raidFightYard: () => t('obj.raidYardFight'),
+    grabCrate: () => t('obj.raidCrate'),
+    raidEscapeCar: () => t('obj.raidEscapeCar'),
+    loseLaw: () => t('obj.escape'),
+    escapeHeat: () => t('obj.escape'),
+  };
+  const line = lines[m.phase];
+  return line ? line() : '';
+}
+
+function point(x, y) {
+  return { x, y };
 }
 
 /**
- * The world point the current objective points at — the spot the gold/red
- * marker stands on — or null when the step has no place (the escape: the
- * target there is the heat itself). The HUD reads this for its distance
- * readout, so the text, the marker, the minimap blip and the distance all
- * agree by construction.
+ * The world point the objective stands on — marker, minimap blip and
+ * HUD distance all read this, so they agree by construction. Null when
+ * the step has no place (an escape: the target is the heat itself).
  */
 export function objectiveTarget(g) {
   const m = g.mission;
@@ -463,61 +422,58 @@ export function objectiveTarget(g) {
     const j = g.job;
     if (j && j.active) {
       if (j.type === 'delivery') {
-        const t = j.phase === 'toPickup' ? j.from : j.to;
-        return t ? { x: t.x, y: t.y } : null;
+        const spot = j.phase === 'toPickup' ? j.from : j.to;
+        return spot ? point(spot.x, spot.y) : null;
       }
       const shop = g.city.shops[j.shopIndex];
-      return shop ? { x: shop.x, y: shop.y } : null;
+      return shop ? point(shop.x, shop.y) : null;
     }
-    // Point at the man himself, not just his diner, while work waits at
-    // his counter — story jobs before the story is done, odd jobs after
-    // it: Bruno is the objective either way.
+    // Waiting for work, Bruno himself is the objective — story jobs
+    // before the story ends, odd jobs after it.
     if (!missionAvailable(g) && !jobAvailable(g)) return null;
-    return g.bruno ? { x: g.bruno.x, y: g.bruno.y } : { x: L.diner.x, y: L.diner.y };
+    return g.bruno ? point(g.bruno.x, g.bruno.y) : point(L.diner.x, L.diner.y);
+  }
+  const carPhases = ['toCar', 'repoFight', 'repoSteal'];
+  if (carPhases.includes(m.phase)) {
+    return m.targetCar ? point(m.targetCar.x, m.targetCar.y) : point(L.ammo.x, L.ammo.y);
   }
   switch (m.phase) {
-    case 'toWarehouse': return { x: L.pier.x, y: L.pier.y };
-    case 'returnDiner': return { x: L.diner.x, y: L.diner.y };
-    case 'toClub': return { x: L.club.x, y: L.club.y };
-    case 'getCar': return m.shade ? { x: m.shade.x, y: m.shade.y } : { x: L.club.x, y: L.club.y };
-    case 'dropoff': return { x: L.pier.x, y: L.pier.y };
+    case 'toWarehouse': return point(L.pier.x, L.pier.y);
+    case 'returnDiner': return point(L.diner.x, L.diner.y);
+    case 'toClub': return point(L.club.x, L.club.y);
+    case 'getCar': return m.shade ? point(m.shade.x, m.shade.y) : point(L.club.x, L.club.y);
+    case 'dropoff': return point(L.pier.x, L.pier.y);
     case 'toShop':
     case 'fight': {
       const shop = g.city.shops[m.shopStep];
-      return shop ? { x: shop.x, y: shop.y } : null;
+      return shop ? point(shop.x, shop.y) : null;
     }
-    case 'toCar':
-    case 'repoFight':
-    case 'repoSteal':
-      return m.targetCar ? { x: m.targetCar.x, y: m.targetCar.y } : { x: L.ammo.x, y: L.ammo.y };
-    case 'repoDeliver': return { x: L.pier.x, y: L.pier.y };
+    case 'repoDeliver': return point(L.pier.x, L.pier.y);
     case 'intercept':
     case 'escortsFight':
     case 'grabCase':
-      return m.courier ? { x: m.courier.x, y: m.courier.y } : null;
-    case 'returnBruno': return { x: L.diner.x, y: L.diner.y };
+      return m.courier ? point(m.courier.x, m.courier.y) : null;
+    case 'returnBruno': return point(L.diner.x, L.diner.y);
     case 'raidDrive':
     case 'raidDoor':
-      return { x: L.pier.x, y: L.pier.y };
+      return point(L.pier.x, L.pier.y);
     case 'raidFightDoor':
     case 'raidFightYard': {
-      // The fight is the target: the nearest man still standing, so a
-      // survivor displaced from the doorstep is pointed at himself.
       const r = nearestStandingRival(g);
-      return r ? { x: r.x, y: r.y } : { x: L.pier.x, y: L.pier.y };
+      return r ? point(r.x, r.y) : point(L.pier.x, L.pier.y);
     }
     case 'grabCrate': return crateSpot(g);
-    // raidEscapeCar (any car will do) and loseLaw / escapeHeat (the
-    // target is the heat itself) have no place to point at.
     default: return null;
   }
 }
+
+// --- endings -------------------------------------------------------------------
 
 function completeMission(g, reward, line) {
   const m = g.mission;
   m.active = false;
   m.phase = '';
-  hideMarkers(g);
+  markersOff(g);
   g.money += reward;
   g.earned += reward;
   if (!g.saveData.missionsDone.includes(m.index)) g.saveData.missionsDone.push(m.index);
@@ -527,25 +483,19 @@ function completeMission(g, reward, line) {
   m.index += 1;
 }
 
-/** The active mission (or odd job) collapses when the player is busted or wasted. */
+/** Busted or wasted collapses whatever is running, set pieces included. */
 export function failMission(g) {
   const m = g.mission;
   if (m.active) {
     m.active = false;
     m.phase = '';
-    hideMarkers(g);
+    markersOff(g);
     if (m.shade) {
       removePed(g, m.shade);
       m.shade = null;
     }
-    if (g.passenger) {
-      g.passenger = null;
-    }
-    for (const rival of m.rivals) removePed(g, rival);
-    m.rivals = [];
-    // Missions 4–6 leave set pieces behind: the raid's second wave, the
-    // courier car, and the repo target car (only while it is still the
-    // debtor's — once the player has taken it, it is just their car).
+    if (g.passenger) g.passenger = null;
+    clearRivals(g, m);
     for (const ped of m.yardMen) removePed(g, ped);
     m.yardMen = [];
     if (m.courier) {
@@ -553,6 +503,8 @@ export function failMission(g) {
       m.courier = null;
     }
     if (m.targetCar) {
+      // Only while it is still the debtor's — once taken, it is the
+      // player's car and stays in the world like any other.
       if (!m.targetCar.touched) removeCar(g, m.targetCar);
       m.targetCar = null;
     }
@@ -564,9 +516,8 @@ export function failMission(g) {
   if (j && j.active) {
     j.active = false;
     j.phase = '';
-    hideMarkers(g);
-    for (const rival of j.rivals) removePed(g, rival);
-    j.rivals = [];
+    markersOff(g);
+    clearRivals(g, j);
     g.say(t('say.jobFailed.title'), t('say.jobFailed.job'), 3.5);
   }
 }
@@ -581,18 +532,7 @@ export function onBoarded(g) {
   g.say(t('say.shadeIn.title'), t('say.shadeIn.sub'), 4);
 }
 
-/** Raise the heat to a scripted star count (the law "notices" the job). */
-function scriptedHeat(g, stars) {
-  const need = HEAT_THRESHOLDS[stars - 1] + 5 - g.heat;
-  if (need > 0) addHeat(g, need, g.player.x, g.player.y, { force: true });
-}
-
-// ---------------------------------------------------------------------------
-// The grab steps (the courier's case, the raid's cash crate): a place the
-// player walks up to and takes with E. main.js asks missionPrompt() what
-// to show and missionInteract() to run the take, in the same prompt /
-// interact priority as Bruno's counter — the mission owns these spots.
-// ---------------------------------------------------------------------------
+// --- the grab steps (the courier's case, the raid's crate) ---------------------
 
 function grabSpot(g) {
   const m = g.mission;
@@ -614,7 +554,7 @@ export function missionPrompt(g) {
   return Math.hypot(g.player.x - spot.x, g.player.y - spot.y) < 54 ? t(spot.key) : '';
 }
 
-/** Run the grab (E pressed at the spot). Returns true when it consumed the press. */
+/** Run the grab (E pressed at the spot). True when it consumed the press. */
 export function missionInteract(g) {
   if (!missionPrompt(g)) return false;
   const m = g.mission;
@@ -632,6 +572,247 @@ export function missionInteract(g) {
   return true;
 }
 
+// --- per-frame phase machines --------------------------------------------------
+
+function stepPackage(g, near) {
+  const m = g.mission;
+  const L = g.city.landmarks;
+  if (m.phase === 'toWarehouse') {
+    goldAt(g, L.pier.x, L.pier.y);
+    if (near(L.pier.x, L.pier.y, 56)) {
+      m.phase = 'returnDiner';
+      g.say(t('say.packageSecured.title'), t('say.packageSecured.mission'), 3);
+      g.events.push({ type: 'pickup' });
+    }
+  } else if (m.phase === 'returnDiner') {
+    goldAt(g, L.diner.x, L.diner.y);
+    if (near(L.diner.x, L.diner.y, 56)) completeMission(g, 150, t('say.jobDone.mission0'));
+  }
+}
+
+function stepShade(g, near) {
+  const m = g.mission;
+  const p = g.player;
+  const L = g.city.landmarks;
+  if (m.phase === 'toClub') {
+    goldAt(g, L.club.x, L.club.y);
+    if (near(L.club.x, L.club.y, 52) && p.state === 'foot') {
+      m.phase = 'getCar';
+      g.say('SHADE', t('say.shade.sub'), 4.5);
+    }
+  } else if (m.phase === 'getCar') {
+    // The marker stands on Shade himself: he IS this step's destination.
+    if (m.shade) goldAt(g, m.shade.x, m.shade.y);
+    else goldAt(g, L.club.x, L.club.y);
+    if (m.shade && p.state === 'car' && p.car) {
+      const d = Math.hypot(m.shade.x - p.car.x, m.shade.y - p.car.y);
+      if (d < 175 && m.shade.state !== 'board') m.shade.state = 'board';
+    }
+  } else if (m.phase === 'escape') {
+    markersOff(g);
+    if (g.stars === 0) {
+      m.phase = 'dropoff';
+      g.say(t('say.clean.title'), t('say.clean.sub'), 3.5);
+    }
+  } else if (m.phase === 'dropoff') {
+    goldAt(g, L.pier.x, L.pier.y);
+    if (near(L.pier.x, L.pier.y, 60) && g.passenger) {
+      removePed(g, g.passenger);
+      g.passenger = null;
+      m.shade = null;
+      if (!g.player.hasPistol) {
+        g.player.hasPistol = true;
+        g.events.push({ type: 'pistol' });
+      }
+      completeMission(g, 300, t('say.jobDone.mission1'));
+    }
+  }
+}
+
+function stepCollections(g, near) {
+  const m = g.mission;
+  const p = g.player;
+  const shop = g.city.shops[m.shopStep];
+  if (m.phase === 'toShop') {
+    goldAt(g, shop.x, shop.y);
+    if (near(shop.x, shop.y, 52) && p.state === 'foot') {
+      m.phase = 'fight';
+      wakeRivals(m.rivals);
+      g.say(t('say.collectors.title'), t('say.collectors.mission'), 3);
+    }
+  } else if (m.phase === 'fight') {
+    redAt(g, shop.x, shop.y);
+    if (allBeaten(g, m.rivals)) {
+      clearRivals(g, m);
+      g.money += 120;
+      g.earned += 120;
+      g.events.push({ type: 'cash', amount: 120 });
+      m.shopStep += 1;
+      if (m.shopStep >= g.city.shops.length) {
+        completeMission(g, 250, t('say.jobDone.mission2'));
+      } else {
+        m.phase = 'toShop';
+        m.rivals = postPair(g, g.city.shops[m.shopStep], m.shopStep);
+        g.say(t('say.paidUp.title'), t('say.paidUp.sub'), 2.6);
+      }
+    }
+  }
+}
+
+function stepRepo(g, near) {
+  const m = g.mission;
+  const p = g.player;
+  const L = g.city.landmarks;
+  const car = m.targetCar;
+  if (m.phase === 'toCar') {
+    if (car) goldAt(g, car.x, car.y);
+    else g.markerRed.visible = false;
+    if (car && near(car.x, car.y, 60) && p.state === 'foot') {
+      m.phase = 'repoFight';
+      wakeRivals(m.rivals);
+      g.say(t('say.repoGuards.title'), t('say.repoGuards.sub'), 3);
+    }
+  } else if (m.phase === 'repoFight') {
+    if (car) redAt(g, car.x, car.y);
+    else g.markerGold.visible = false;
+    if (allBeaten(g, m.rivals)) {
+      clearRivals(g, m);
+      m.phase = 'repoSteal';
+      g.say(t('say.repoClear.title'), t('say.repoClear.sub'), 3);
+    }
+  } else if (m.phase === 'repoSteal') {
+    if (car) goldAt(g, car.x, car.y);
+    else g.markerRed.visible = false;
+    if (car && p.state === 'car' && p.car === car) {
+      m.phase = 'repoDeliver';
+      // The whole PD hears about this particular car the moment it rolls.
+      scriptedHeat(g, 2);
+      g.say(t('say.repoHot.title'), t('say.repoHot.sub'), 4);
+    }
+  } else if (m.phase === 'repoDeliver') {
+    goldAt(g, L.pier.x, L.pier.y);
+    if (car && p.state === 'car' && p.car === car && near(L.pier.x, L.pier.y, 62)) {
+      m.targetCar = null; // delivered: from here it is just a car in the world
+      completeMission(g, 220, t('say.jobDone.mission3'));
+    }
+  }
+}
+
+function stepCourier(g, near, dt) {
+  const m = g.mission;
+  const L = g.city.landmarks;
+  const car = m.courier;
+  if (m.phase === 'intercept') {
+    if (car) {
+      driveCourier(g, car, dt);
+      goldAt(g, car.x, car.y);
+    } else {
+      g.markerRed.visible = false;
+    }
+    const pinned = car && (car.stillT ?? 0) > 2.2 && near(car.x, car.y, 320);
+    if (car && (car.wrecked || pinned)) {
+      // The crew bails out swinging — Bruno-grade troublemakers with
+      // more health and faster feet than the shop collectors. Their
+      // pistols are for show: Palmera's combat only lets the player
+      // shoot, so they fight as elite fist fighters.
+      car.speed = 0;
+      m.rivals = [
+        spawnPed(g, { role: 'rival', x: car.x + 32, y: car.y + 20, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
+        spawnPed(g, { role: 'rival', x: car.x - 32, y: car.y - 20, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
+      ];
+      for (const rival of m.rivals) rival.state = 'fight';
+      m.phase = 'escortsFight';
+      g.say(t('say.escorts.title'), t('say.escorts.sub'), 3.5);
+    }
+  } else if (m.phase === 'escortsFight') {
+    if (car) redAt(g, car.x, car.y);
+    else g.markerGold.visible = false;
+    if (allBeaten(g, m.rivals)) {
+      clearRivals(g, m);
+      m.phase = 'grabCase';
+      g.say(t('say.escortsDown.title'), t('say.escortsDown.sub'), 3);
+    }
+  } else if (m.phase === 'grabCase') {
+    if (car) goldAt(g, car.x, car.y);
+    else g.markerRed.visible = false;
+  } else if (m.phase === 'escapeHeat') {
+    markersOff(g);
+    if (g.stars === 0) {
+      m.phase = 'returnBruno';
+      g.say(t('say.clean.title'), t('say.clean.sub2'), 3.5);
+    }
+  } else if (m.phase === 'returnBruno') {
+    goldAt(g, L.diner.x, L.diner.y);
+    if (near(L.diner.x, L.diner.y, 56)) completeMission(g, 300, t('say.jobDone.mission4'));
+  }
+}
+
+function stepRaid(g, near, dt) {
+  const m = g.mission;
+  const p = g.player;
+  const L = g.city.landmarks;
+  if (m.phase === 'raidDrive') {
+    goldAt(g, L.pier.x, L.pier.y);
+    if (m.timeBonus) {
+      m.timer -= dt;
+      if (m.timer <= 0) {
+        m.timer = 0;
+        m.timeBonus = false;
+        g.say(t('say.timeBonusLost.title'), t('say.timeBonusLost.sub'), 3);
+      }
+    }
+    if (near(L.pier.x, L.pier.y, 72)) m.phase = 'raidDoor';
+  } else if (m.phase === 'raidDoor') {
+    goldAt(g, L.pier.x, L.pier.y);
+    if (near(L.pier.x, L.pier.y, 56) && p.state === 'foot') {
+      m.phase = 'raidFightDoor';
+      wakeRivals(m.rivals);
+      g.say(t('say.raidGuards.title'), t('say.raidGuards.sub'), 3);
+    }
+  } else if (m.phase === 'raidFightDoor' || m.phase === 'raidFightYard') {
+    const tgt = nearestStandingRival(g);
+    redAt(g, tgt ? tgt.x : L.pier.x, tgt ? tgt.y : L.pier.y);
+    if (!allBeaten(g, m.rivals)) return;
+    clearRivals(g, m);
+    if (m.phase === 'raidFightDoor') {
+      // The yard crew becomes the fight. The wake stays guarded: a man
+      // beaten while he waited (even swept by the down-timer) must not
+      // be flipped back to 'fight' as a ghost the count can never
+      // satisfy again.
+      m.rivals = m.yardMen;
+      m.yardMen = [];
+      wakeRivals(m.rivals);
+      m.phase = 'raidFightYard';
+      g.say(t('say.yard.title'), t('say.yard.sub'), 3);
+    } else {
+      m.phase = 'grabCrate';
+      g.say(t('say.yardDown.title'), t('say.yardDown.sub'), 3);
+    }
+  } else if (m.phase === 'grabCrate') {
+    const spot = crateSpot(g);
+    goldAt(g, spot.x, spot.y);
+  } else if (m.phase === 'raidEscapeCar') {
+    markersOff(g);
+    if (p.state === 'car') m.phase = 'loseLaw';
+  } else if (m.phase === 'loseLaw') {
+    markersOff(g);
+    if (g.stars === 0) {
+      m.phase = 'returnBruno';
+      g.say(t('say.clean.title'), t('say.clean.sub2'), 3.5);
+    }
+  } else if (m.phase === 'returnBruno') {
+    goldAt(g, L.diner.x, L.diner.y);
+    if (near(L.diner.x, L.diner.y, 56)) {
+      const reward = 450 + (m.timeBonus ? RAID_TIME_BONUS : 0);
+      completeMission(g, reward, t('say.jobDone.mission5'));
+      // The finale gets its own moment over the JOB DONE banner.
+      g.say(t('say.storyComplete.title'), t('say.storyComplete.sub', { reward: `$${reward}` }), 6.5);
+    }
+  }
+}
+
+const STEP_BY_INDEX = [stepPackage, stepShade, stepCollections, stepRepo, stepCourier, stepRaid];
+
 /** Arrival checks, fight checks and marker placement, once per frame. */
 export function updateMissions(g, dt, time) {
   const m = g.mission;
@@ -643,274 +824,17 @@ export function updateMissions(g, dt, time) {
       updateJob(g);
       return;
     }
-    // No job running: the gold marker (and the minimap blip that follows
-    // the same target) stands on Bruno himself, so the next job is always
-    // findable — the talk prompt never points at an empty doorstep. True
-    // for story work and, in free roam, for odd jobs alike.
+    // Nothing running: the gold marker stands on Bruno himself, so the
+    // next job is always findable — for story work and odd jobs alike.
     if ((missionAvailable(g) || jobAvailable(g)) && g.bruno) {
-      setMarker(g, g.markerGold, g.bruno.x, g.bruno.y);
-      g.markerRed.visible = false;
+      goldAt(g, g.bruno.x, g.bruno.y);
     } else {
-      hideMarkers(g);
+      markersOff(g);
     }
     return;
   }
   const p = g.player;
-  const L = g.city.landmarks;
   const near = (x, y, r) => Math.hypot(p.x - x, p.y - y) < r;
-
-  if (m.index === 0) {
-    if (m.phase === 'toWarehouse') {
-      setMarker(g, g.markerGold, L.pier.x, L.pier.y);
-      g.markerRed.visible = false;
-      if (near(L.pier.x, L.pier.y, 56)) {
-        m.phase = 'returnDiner';
-        g.say(t('say.packageSecured.title'), t('say.packageSecured.mission'), 3);
-        g.events.push({ type: 'pickup' });
-      }
-    } else if (m.phase === 'returnDiner') {
-      setMarker(g, g.markerGold, L.diner.x, L.diner.y);
-      if (near(L.diner.x, L.diner.y, 56)) {
-        completeMission(g, 150, t('say.jobDone.mission0'));
-      }
-    }
-  } else if (m.index === 1) {
-    if (m.phase === 'toClub') {
-      setMarker(g, g.markerGold, L.club.x, L.club.y);
-      g.markerRed.visible = false;
-      if (near(L.club.x, L.club.y, 52) && p.state === 'foot') {
-        // Shade has been waiting at the club door since the job was taken
-        // (posted in acceptMission) — arriving just starts the next step.
-        m.phase = 'getCar';
-        g.say('SHADE', t('say.shade.sub'), 4.5);
-      }
-    } else if (m.phase === 'getCar') {
-      // The marker (and with it the minimap blip) stands on Shade himself:
-      // he IS the destination of this step.
-      if (m.shade) setMarker(g, g.markerGold, m.shade.x, m.shade.y);
-      else setMarker(g, g.markerGold, L.club.x, L.club.y);
-      g.markerRed.visible = false;
-      if (m.shade && p.state === 'car' && p.car) {
-        const d = Math.hypot(m.shade.x - p.car.x, m.shade.y - p.car.y);
-        if (d < 175 && m.shade.state !== 'board') m.shade.state = 'board';
-      }
-    } else if (m.phase === 'escape') {
-      hideMarkers(g);
-      if (g.stars === 0) {
-        m.phase = 'dropoff';
-        g.say(t('say.clean.title'), t('say.clean.sub'), 3.5);
-      }
-    } else if (m.phase === 'dropoff') {
-      setMarker(g, g.markerGold, L.pier.x, L.pier.y);
-      g.markerRed.visible = false;
-      if (near(L.pier.x, L.pier.y, 60) && g.passenger) {
-        if (g.passenger) {
-          removePed(g, g.passenger);
-          g.passenger = null;
-        }
-        m.shade = null;
-        if (!g.player.hasPistol) {
-          g.player.hasPistol = true;
-          g.events.push({ type: 'pistol' });
-        }
-        completeMission(g, 300, t('say.jobDone.mission1'));
-      }
-    }
-  } else if (m.index === 2) {
-    const shop = g.city.shops[m.shopStep];
-    if (m.phase === 'toShop') {
-      setMarker(g, g.markerGold, shop.x, shop.y);
-      g.markerRed.visible = false;
-      if (near(shop.x, shop.y, 52) && p.state === 'foot') {
-        // The collectors were posted at this shop when the step became
-        // current (acceptMission / the previous shop's payoff) — the
-        // trigger only wakes the men the player already saw waiting.
-        m.phase = 'fight';
-        for (const rival of m.rivals) if (rival.state === 'idle') rival.state = 'fight';
-        g.say(t('say.collectors.title'), t('say.collectors.mission'), 3);
-      }
-    } else if (m.phase === 'fight') {
-      setMarker(g, g.markerRed, shop.x, shop.y);
-      g.markerGold.visible = false;
-      if (m.rivals.every((r) => rivalBeaten(g, r))) {
-        for (const rival of m.rivals) removePed(g, rival);
-        m.rivals = [];
-        g.money += 120;
-        g.earned += 120;
-        g.events.push({ type: 'cash', amount: 120 });
-        m.shopStep += 1;
-        if (m.shopStep >= g.city.shops.length) {
-          completeMission(g, 250, t('say.jobDone.mission2'));
-        } else {
-          m.phase = 'toShop';
-          postCollectors(g);
-          g.say(t('say.paidUp.title'), t('say.paidUp.sub'), 2.6);
-        }
-      }
-    }
-  } else if (m.index === 3) {
-    // REPO JOB: fists at the curb, then the marked car to the warehouse.
-    const car = m.targetCar;
-    if (m.phase === 'toCar') {
-      if (car) setMarker(g, g.markerGold, car.x, car.y);
-      g.markerRed.visible = false;
-      if (car && near(car.x, car.y, 60) && p.state === 'foot') {
-        m.phase = 'repoFight';
-        for (const rival of m.rivals) if (rival.state === 'idle') rival.state = 'fight';
-        g.say(t('say.repoGuards.title'), t('say.repoGuards.sub'), 3);
-      }
-    } else if (m.phase === 'repoFight') {
-      if (car) setMarker(g, g.markerRed, car.x, car.y);
-      g.markerGold.visible = false;
-      if (m.rivals.every((r) => rivalBeaten(g, r))) {
-        for (const rival of m.rivals) removePed(g, rival);
-        m.rivals = [];
-        m.phase = 'repoSteal';
-        g.say(t('say.repoClear.title'), t('say.repoClear.sub'), 3);
-      }
-    } else if (m.phase === 'repoSteal') {
-      if (car) setMarker(g, g.markerGold, car.x, car.y);
-      g.markerRed.visible = false;
-      if (car && p.state === 'car' && p.car === car) {
-        m.phase = 'repoDeliver';
-        // The whole PD hears about this particular car the moment it rolls.
-        scriptedHeat(g, 2);
-        g.say(t('say.repoHot.title'), t('say.repoHot.sub'), 4);
-      }
-    } else if (m.phase === 'repoDeliver') {
-      setMarker(g, g.markerGold, L.pier.x, L.pier.y);
-      g.markerRed.visible = false;
-      if (car && p.state === 'car' && p.car === car && near(L.pier.x, L.pier.y, 62)) {
-        m.targetCar = null; // delivered: from here it is just a car in the world
-        completeMission(g, 220, t('say.jobDone.mission3'));
-      }
-    }
-  } else if (m.index === 4) {
-    // COURIER HIT: stop the moving car, beat its crew, take the case.
-    const car = m.courier;
-    if (m.phase === 'intercept') {
-      if (car) {
-        driveCourier(g, car, dt);
-        setMarker(g, g.markerGold, car.x, car.y);
-      }
-      g.markerRed.visible = false;
-      const pinned = car && (car.stillT ?? 0) > 2.2 && near(car.x, car.y, 320);
-      if (car && (car.wrecked || pinned)) {
-        // The crew bails out swinging: two of Bruno-grade troublemakers
-        // with more health and faster feet than the shop collectors.
-        // (They carry pistols you can see — gun in hand, raised in the
-        // fight — but Palmera's combat system only lets the player
-        // shoot, so the escorts fight as elite fist fighters.)
-        car.speed = 0;
-        m.rivals = [
-          spawnPed(g, { role: 'rival', x: car.x + 32, y: car.y + 20, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
-          spawnPed(g, { role: 'rival', x: car.x - 32, y: car.y - 20, hp: 150, chase: 208, punchRate: 0.7, armed: true }),
-        ];
-        for (const rival of m.rivals) rival.state = 'fight';
-        m.phase = 'escortsFight';
-        g.say(t('say.escorts.title'), t('say.escorts.sub'), 3.5);
-      }
-    } else if (m.phase === 'escortsFight') {
-      if (car) setMarker(g, g.markerRed, car.x, car.y);
-      g.markerGold.visible = false;
-      if (m.rivals.every((r) => rivalBeaten(g, r))) {
-        for (const rival of m.rivals) removePed(g, rival);
-        m.rivals = [];
-        m.phase = 'grabCase';
-        g.say(t('say.escortsDown.title'), t('say.escortsDown.sub'), 3);
-      }
-    } else if (m.phase === 'grabCase') {
-      if (car) setMarker(g, g.markerGold, car.x, car.y);
-      g.markerRed.visible = false;
-    } else if (m.phase === 'escapeHeat') {
-      hideMarkers(g);
-      if (g.stars === 0) {
-        m.phase = 'returnBruno';
-        g.say(t('say.clean.title'), t('say.clean.sub2'), 3.5);
-      }
-    } else if (m.phase === 'returnBruno') {
-      setMarker(g, g.markerGold, L.diner.x, L.diner.y);
-      g.markerRed.visible = false;
-      if (near(L.diner.x, L.diner.y, 56)) {
-        completeMission(g, 300, t('say.jobDone.mission4'));
-      }
-    }
-  } else if (m.index === 5) {
-    // WAREHOUSE RAID: the timed drive, two waves of fists, the crate,
-    // and a hot escape — the whole toolbox in one job.
-    if (m.phase === 'raidDrive') {
-      setMarker(g, g.markerGold, L.pier.x, L.pier.y);
-      g.markerRed.visible = false;
-      if (m.timeBonus) {
-        m.timer -= dt;
-        if (m.timer <= 0) {
-          m.timer = 0;
-          m.timeBonus = false;
-          g.say(t('say.timeBonusLost.title'), t('say.timeBonusLost.sub'), 3);
-        }
-      }
-      if (near(L.pier.x, L.pier.y, 72)) m.phase = 'raidDoor';
-    } else if (m.phase === 'raidDoor') {
-      setMarker(g, g.markerGold, L.pier.x, L.pier.y);
-      g.markerRed.visible = false;
-      if (near(L.pier.x, L.pier.y, 56) && p.state === 'foot') {
-        m.phase = 'raidFightDoor';
-        for (const rival of m.rivals) if (rival.state === 'idle') rival.state = 'fight';
-        g.say(t('say.raidGuards.title'), t('say.raidGuards.sub'), 3);
-      }
-    } else if (m.phase === 'raidFightDoor') {
-      const tgt = nearestStandingRival(g);
-      setMarker(g, g.markerRed, tgt ? tgt.x : L.pier.x, tgt ? tgt.y : L.pier.y);
-      g.markerGold.visible = false;
-      if (m.rivals.every((r) => rivalBeaten(g, r))) {
-        for (const rival of m.rivals) removePed(g, rival);
-        // The yard crew becomes the fight: posted since accept time,
-        // they only wake now that the door is clear. The wake is the
-        // same guarded flip every other wave in this file gets — a man
-        // already down stays down. He may have been beaten while he
-        // waited (a stray shot, a car through the yard) and even
-        // removed by the down-timer; flipping him to 'fight'
-        // unconditionally resurrected exactly that man as a ghost the
-        // count could never satisfy again, soft-locking the step.
-        m.rivals = m.yardMen;
-        m.yardMen = [];
-        for (const rival of m.rivals) if (rival.state === 'idle') rival.state = 'fight';
-        m.phase = 'raidFightYard';
-        g.say(t('say.yard.title'), t('say.yard.sub'), 3);
-      }
-    } else if (m.phase === 'raidFightYard') {
-      const tgt = nearestStandingRival(g);
-      setMarker(g, g.markerRed, tgt ? tgt.x : L.pier.x, tgt ? tgt.y : L.pier.y);
-      g.markerGold.visible = false;
-      if (m.rivals.every((r) => rivalBeaten(g, r))) {
-        for (const rival of m.rivals) removePed(g, rival);
-        m.rivals = [];
-        m.phase = 'grabCrate';
-        g.say(t('say.yardDown.title'), t('say.yardDown.sub'), 3);
-      }
-    } else if (m.phase === 'grabCrate') {
-      const spot = crateSpot(g);
-      setMarker(g, g.markerGold, spot.x, spot.y);
-      g.markerRed.visible = false;
-    } else if (m.phase === 'raidEscapeCar') {
-      hideMarkers(g);
-      if (p.state === 'car') m.phase = 'loseLaw';
-    } else if (m.phase === 'loseLaw') {
-      hideMarkers(g);
-      if (g.stars === 0) {
-        m.phase = 'returnBruno';
-        g.say(t('say.clean.title'), t('say.clean.sub2'), 3.5);
-      }
-    } else if (m.phase === 'returnBruno') {
-      setMarker(g, g.markerGold, L.diner.x, L.diner.y);
-      g.markerRed.visible = false;
-      if (near(L.diner.x, L.diner.y, 56)) {
-        const reward = 450 + (m.timeBonus ? RAID_TIME_BONUS : 0);
-        completeMission(g, reward, t('say.jobDone.mission5'));
-        // The finale gets its own moment over the JOB DONE banner:
-        // the extended story is over, and Palmera knows it.
-        g.say(t('say.storyComplete.title'), t('say.storyComplete.sub', { reward: `$${reward}` }), 6.5);
-      }
-    }
-  }
+  const step = STEP_BY_INDEX[m.index];
+  if (step) step(g, near, dt);
 }

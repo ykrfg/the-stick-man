@@ -1,19 +1,19 @@
-// Every sound in the game is synthesized with WebAudio: short oscillator and noise
-// bleeps for punches, pickups, gunfire and menus, a two-tone siren that loops while
-// the police are close, and a low engine hum pitched by the car's speed. Recorded
-// effects live in game/audio/ and take over their synth counterparts whenever the
-// file is present (see SE_FILES): gun, punch connects and knockouts, swings, the
-// brake chirp and screech, the car door and the crash. Anything missing or not
-// yet decoded falls back to the synth voice, so the game sounds whole offline,
-// on any host, from the first frame.
+// Every sound in the game is synthesized with WebAudio: short oscillator and
+// noise bleeps for punches, pickups, gunfire and menus, a two-tone siren that
+// loops while the police are close, and a low engine hum pitched by the car's
+// speed. Recorded effects live in game/audio/ and take over their synth
+// counterparts whenever the file is present (see RECORDED): gun, punch
+// connects and knockouts, swings, the brake chirp and screech, the car door
+// and the crash. Anything missing or not yet decoded falls back to the synth
+// voice, so the game sounds whole offline, on any host, from the first frame.
 
 /**
- * The recorded-effect manifest: logical pool -> files in game/audio/.
- * Pools with several files pick one at random per play, with a slight
- * pitch wobble, so repeated hits never sound stamped out. Provenance and
- * licences for every file: game/audio/SOURCES.md.
+ * The recorded-effect manifest: logical pool -> files in game/audio/. Pools
+ * with several files pick one at random per play, with a slight pitch
+ * wobble, so repeated hits never sound stamped out. Provenance and licences
+ * for every file: game/audio/SOURCES.md.
  */
-const SE_FILES = {
+const RECORDED = {
   gun: ['audio/se_gun.ogg'],
   swing: ['audio/se_swing1.ogg', 'audio/se_swing2.ogg', 'audio/se_swing3.ogg', 'audio/se_swing4.ogg'],
   punch: ['audio/se_punch1.ogg', 'audio/se_punch2.ogg', 'audio/se_punch3.ogg', 'audio/se_punch4.ogg'],
@@ -53,26 +53,26 @@ export class SoundFX {
   }
 
   /**
-   * Fetch and decode the recorded effects in the background, ONE file at
-   * a time: a burst of seventeen decodes the moment the game unlocks
-   * would stall the first frames of play on a slow machine, and the
-   * synth voices cover the gap by design. A file that is absent or
-   * undecodable simply never lands in its pool — the manifest is an
-   * upgrade, never a dependency.
+   * Fetch and decode the recorded effects in the background, ONE file at a
+   * time: a burst of seventeen decodes the moment the game unlocks would
+   * stall the first frames of play on a slow machine, and the synth voices
+   * cover the gap by design. A file that is absent or undecodable simply
+   * never lands in its pool — the manifest is an upgrade, never a
+   * dependency.
    */
   loadFiles() {
     if (this.filesStarted || !this.ctx) return;
     this.filesStarted = true;
     const jobs = [];
-    for (const [pool, files] of Object.entries(SE_FILES)) {
+    for (const pool of Object.keys(RECORDED)) {
       this.fileBuffers[pool] = [];
-      for (const url of files) jobs.push([pool, url]);
+      for (const url of RECORDED[pool]) jobs.push({ pool, url });
     }
-    let i = 0;
+    let next = 0;
     const step = () => {
-      if (i >= jobs.length) return;
-      const [pool, url] = jobs[i];
-      i += 1;
+      if (next >= jobs.length) return;
+      const { pool, url } = jobs[next];
+      next += 1;
       fetch(url)
         .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(url))))
         .then((buf) => this.ctx.decodeAudioData(buf))
@@ -91,9 +91,8 @@ export class SoundFX {
     if (!this.ctx || this.muted || !this.seMaster) return false;
     const ready = this.fileBuffers[pool];
     if (!ready || ready.length === 0) return false;
-    const buffer = ready[Math.floor(Math.random() * ready.length)];
     const source = this.ctx.createBufferSource();
-    source.buffer = buffer;
+    source.buffer = ready[Math.floor(Math.random() * ready.length)];
     source.playbackRate.value = 0.94 + Math.random() * 0.12;
     const gain = this.ctx.createGain();
     gain.gain.value = volume;
@@ -103,10 +102,21 @@ export class SoundFX {
     return true;
   }
 
+  /** True when the pool's recorded voice played (the synth stays silent). */
+  recorded(pool, volume) {
+    return this.playFile(pool, volume);
+  }
+
   setMuted(muted) {
     this.muted = muted;
     if (this.master) this.master.gain.value = muted ? 0 : 0.5;
     if (this.seMaster) this.seMaster.gain.value = muted ? 0 : this.se;
+  }
+
+  /** Sound-effect bus volume 0..1 (volume slider; independent of the music). */
+  setSeVolume(v) {
+    this.se = Math.max(0, Math.min(1, v));
+    if (this.seMaster) this.seMaster.gain.value = this.se;
   }
 
   /** One oscillator blip: type, start/end frequency, length, volume, delay. */
@@ -114,10 +124,10 @@ export class SoundFX {
     if (!this.ctx || this.muted) return;
     const t0 = this.ctx.currentTime + delay;
     const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
     osc.type = type;
     osc.frequency.setValueAtTime(from, t0);
     osc.frequency.exponentialRampToValueAtTime(Math.max(20, to), t0 + seconds);
+    const gain = this.ctx.createGain();
     gain.gain.setValueAtTime(volume, t0);
     gain.gain.exponentialRampToValueAtTime(0.001, t0 + seconds);
     osc.connect(gain);
@@ -148,10 +158,10 @@ export class SoundFX {
     source.start(t0);
   }
 
-  /** Sound-effect bus volume 0..1 (volume slider; independent of the music). */
-  setSeVolume(v) {
-    this.se = Math.max(0, Math.min(1, v));
-    if (this.seMaster) this.seMaster.gain.value = this.se;
+  /** A noise burst with a tone under it: the shape of most synth impacts. */
+  thud(noiseSeconds, noiseVolume, cutoff, type, from, to, toneSeconds, toneVolume) {
+    this.noise(noiseSeconds, noiseVolume, cutoff);
+    this.tone(type, from, to, toneSeconds, toneVolume);
   }
 
   uiBlip() {
@@ -164,26 +174,24 @@ export class SoundFX {
   }
 
   punch() {
-    if (this.playFile('punch', 0.85)) return;
-    this.noise(0.09, 0.3, 700);
-    this.tone('sine', 160, 60, 0.09, 0.2);
+    if (this.recorded('punch', 0.85)) return;
+    this.thud(0.09, 0.3, 700, 'sine', 160, 60, 0.09, 0.2);
   }
 
   /** A knockout-grade connect: the heavy recorded thud, or a deeper synth. */
   punchHeavy() {
-    if (this.playFile('heavy', 0.95)) return;
-    this.noise(0.14, 0.42, 500);
-    this.tone('sine', 120, 45, 0.14, 0.3);
+    if (this.recorded('heavy', 0.95)) return;
+    this.thud(0.14, 0.42, 500, 'sine', 120, 45, 0.14, 0.3);
   }
 
   /**
-   * The swing whoosh: fires at punch initiation for EVERY player punch
-   * (round #22 — it used to play only on a miss, at landing). Gain
-   * stays 0.5: as an every-punch sound it must sit under the connect
-   * sounds (punch ~0.9, heavy 0.95), present but never competing.
+   * The swing whoosh: fires at punch initiation for EVERY player punch (it
+   * used to play only on a miss, at landing). Gain stays 0.5: as an
+   * every-punch sound it must sit under the connect sounds (punch ~0.9,
+   * heavy 0.95), present but never competing.
    */
   swing() {
-    if (this.playFile('swing', 0.5)) return;
+    if (this.recorded('swing', 0.5)) return;
     this.tone('triangle', 150, 90, 0.05, 0.1);
   }
 
@@ -192,9 +200,8 @@ export class SoundFX {
   }
 
   shoot() {
-    if (this.playFile('gun', 0.85)) return;
-    this.noise(0.12, 0.32, 2600);
-    this.tone('square', 320, 70, 0.1, 0.14);
+    if (this.recorded('gun', 0.85)) return;
+    this.thud(0.12, 0.32, 2600, 'square', 320, 70, 0.1, 0.14);
   }
 
   pickup() {
@@ -209,24 +216,23 @@ export class SoundFX {
   }
 
   carDoor() {
-    if (this.playFile('door', 0.85)) return;
+    if (this.recorded('door', 0.85)) return;
     this.noise(0.06, 0.2, 500);
     this.tone('sine', 120, 70, 0.08, 0.16, 0.03);
   }
 
   crash(strength = 1) {
-    if (this.playFile('crash', Math.min(1, 0.35 + 0.65 * strength))) return;
-    this.noise(0.18, 0.3 * strength, 900);
-    this.tone('sine', 110, 40, 0.18, 0.22 * strength);
+    if (this.recorded('crash', Math.min(1, 0.35 + 0.65 * strength))) return;
+    this.thud(0.18, 0.3 * strength, 900, 'sine', 110, 40, 0.18, 0.22 * strength);
   }
 
   /**
-   * The brake pedal's voice: the short recorded chirp for an ordinary
-   * stop, the long screech only for a hard stop from high speed (the
-   * callers in vehicles.js pick which, by the speed the stop began at).
+   * The brake pedal's voice: the short recorded chirp for an ordinary stop,
+   * the long screech only for a hard stop from high speed (the callers in
+   * vehicles.js pick which, by the speed the stop began at).
    */
   brake(long) {
-    if (this.playFile(long ? 'brakeLong' : 'brake', 0.8)) return;
+    if (this.recorded(long ? 'brakeLong' : 'brake', 0.8)) return;
     this.screech(long ? 1 : 0.55);
   }
 
@@ -246,16 +252,16 @@ export class SoundFX {
     if (!this.ctx) return;
     if (on && !this.sirenNodes) {
       const osc = this.ctx.createOscillator();
-      const lfo = this.ctx.createOscillator();
-      const lfoGain = this.ctx.createGain();
-      const gain = this.ctx.createGain();
       osc.type = 'triangle';
       osc.frequency.value = 780;
+      const lfo = this.ctx.createOscillator();
       lfo.type = 'square';
       lfo.frequency.value = 1.6;
+      const lfoGain = this.ctx.createGain();
       lfoGain.gain.value = 160;
       lfo.connect(lfoGain);
       lfoGain.connect(osc.frequency);
+      const gain = this.ctx.createGain();
       gain.gain.value = this.muted ? 0 : 0.045;
       osc.connect(gain);
       gain.connect(this.seMaster);
@@ -263,14 +269,14 @@ export class SoundFX {
       lfo.start();
       this.sirenNodes = { osc, lfo, gain };
     } else if (!on && this.sirenNodes) {
-      const { osc, lfo } = this.sirenNodes;
+      const nodes = this.sirenNodes;
+      this.sirenNodes = null;
       try {
-        osc.stop();
-        lfo.stop();
+        nodes.osc.stop();
+        nodes.lfo.stop();
       } catch {
         /* already stopped */
       }
-      this.sirenNodes = null;
     }
     if (on && this.sirenNodes) this.sirenNodes.gain.gain.value = this.muted ? 0 : 0.045;
   }
@@ -280,13 +286,13 @@ export class SoundFX {
     if (!this.ctx) return;
     if (on && !this.engineNodes) {
       const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
       osc.type = 'sawtooth';
       osc.frequency.value = 55;
-      gain.gain.value = 0.0;
       const filter = this.ctx.createBiquadFilter();
       filter.type = 'lowpass';
       filter.frequency.value = 320;
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0.0;
       osc.connect(filter);
       filter.connect(gain);
       gain.connect(this.seMaster);
@@ -297,28 +303,27 @@ export class SoundFX {
       const { osc, gain } = this.engineNodes;
       if (on) {
         osc.frequency.value = 50 + speedRatio * 130;
-        // Level (round #23): the hum used to top out at 0.10 into the
-        // 0.5 master — fine when it was the only sound in the game, but
-        // once real BGM arrived (round #20, elements playing at up to
-        // 0.7 direct) a 50-180 Hz lowpassed hum at 0.025-0.05 at the
-        // destination was masked to inaudibility. The wiring was never
-        // broken (nodes alive, frequency tracking speed); the voice is
-        // now ~3x louder, still a low background note under the music,
-        // still routed through seMaster so the SE slider and the mute
-        // keep their authority over it.
+        // Level: the hum used to top out at 0.10 into the 0.5 master — fine
+        // when it was the only sound in the game, but once real BGM arrived
+        // (elements playing at up to 0.7 direct) a 50-180 Hz lowpassed hum
+        // at 0.025-0.05 at the destination was masked to inaudibility. The
+        // wiring was never broken (nodes alive, frequency tracking speed);
+        // the voice is now ~3x louder, still a low background note under
+        // the music, still routed through seMaster so the SE slider and
+        // the mute keep their authority over it.
         gain.gain.value = this.muted ? 0 : 0.16 + speedRatio * 0.14;
       } else {
         gain.gain.value = 0;
       }
     }
     if (!on && this.engineNodes) {
-      const { osc } = this.engineNodes;
+      const nodes = this.engineNodes;
+      this.engineNodes = null;
       try {
-        osc.stop();
+        nodes.osc.stop();
       } catch {
         /* already stopped */
       }
-      this.engineNodes = null;
     }
   }
 }

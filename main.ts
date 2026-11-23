@@ -1,43 +1,49 @@
-// THE STICK MAN — a gta6-01 entry (Node 22, standard library only). The game is this
-// directory's game/ folder: plain static files a desktop browser loads offline
-// (game/index.html, its ES modules, and a vendored Three.js under game/vendor/ — no
-// network request at runtime). This program hands it in: it copies game/ and
-// screenshots/ from beside this file to /output and writes /output/dossier.json, the
-// summary the judge reads, with the vendored make.fun library.
+// THE STICK MAN — hand-in program for the gta6-01 bounty (Node 22, standard library
+// only, erasable TypeScript: it runs as-is with `node main.ts`, no build step).
 //
-// Serve it locally with `node serve.ts`, then open http://localhost:8080.
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
-//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+// The entry itself is the game/ tree beside this file: plain static files a desktop
+// browser loads offline (game/index.html, its ES modules, a vendored Three.js — no
+// network at runtime). This program stages that tree and the screenshots/ set into
+// the output directory, then writes the dossier the judge reads. The dossier comes
+// from make.fun's vendored library, so the summary is produced by the very code the
+// scorer runs on the other side.
+//
+// Output directory: MAKEFUN_OUTPUT_DIR when set, /output otherwise.
+// Local play: `node serve.ts`, then open http://localhost:8080.
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-/** The game this hand-in ships; stamped into the log so a run names its entry. */
-const GAME_TITLE = 'THE STICK MAN';
+/** The entry's name, stamped into the run log so a hand-in names what it ships. */
+const ENTRY_NAME = 'THE STICK MAN';
 
-const here = fileURLToPath(new URL('.', import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+// The scorer's caps, mirrored here so this program refuses a tree the scorer would
+// refuse anyway: at most 4 screenshots of at most 256 KiB each, at most 993 files
+// and 48 MiB under game/, no game path over 1000 bytes. Of these, only the text cap
+// shapes the dossier's bytes.
+const DOSSIER_CAPS = {
+  text_max_bytes: 163840,
+  screenshots: { max: 4, max_bytes: 262144 },
+  game_max_files: 993,
+  game_max_bytes: 50331648,
+  game_path_max_bytes: 1000,
+};
 
-console.log(`Handing in ${GAME_TITLE}: copying game/ and screenshots/ to ${out}`);
+/** Copy game/ and (when present) screenshots/ from beside this file into outDir. */
+function stageInto(outDir: string): void {
+  const home = path.dirname(fileURLToPath(import.meta.url));
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.cpSync(path.join(home, 'game'), path.join(outDir, 'game'), { recursive: true });
+  const shotsTo = path.join(outDir, 'screenshots');
+  fs.mkdirSync(shotsTo, { recursive: true });
+  const shotsFrom = path.join(home, 'screenshots');
+  if (fs.existsSync(shotsFrom)) fs.cpSync(shotsFrom, shotsTo, { recursive: true });
+}
 
-mkdirSync(out, { recursive: true });
-cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
-mkdirSync(join(out, 'screenshots'), { recursive: true });
-if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
-
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the bytes; the others refuse an entry the
-// scorer would refuse (more than 4 screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB of game
-// files, in all, or a path under game/ over 1000 bytes: game/ counts beside /output's own 1000-entry cap, its
-// screenshots/ and dossier.json).
-writeFileSync(
-  join(out, 'dossier.json'),
-  buildDossier(out, {
-    text_max_bytes: 163840,
-    screenshots: { max: 4, max_bytes: 262144 },
-    game_max_files: 993,
-    game_max_bytes: 50331648,
-    game_path_max_bytes: 1000,
-  }),
-);
+const target = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+console.log(`Staging ${ENTRY_NAME} into ${target}: game/ + screenshots/, then dossier.json`);
+stageInto(target);
+fs.writeFileSync(path.join(target, 'dossier.json'), buildDossier(target, DOSSIER_CAPS));
+console.log('Hand-in complete.');
