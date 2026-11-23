@@ -1,41 +1,37 @@
-// Sound effects: two voices for everything.
+// audio.js — the sound-effects engine, with two voices for every effect.
 //
-// Each effect can be spoken by a recorded file from game/audio/ or, when no
-// file has arrived (or the host serves none), by a small WebAudio synth
-// patch — oscillator sweeps and shaped noise. The recorded voice wins
-// whenever its buffer is decoded; the synth is the standing fallback, so
-// the game is never silent and never blocked on audio. A looping siren and
-// the engine hum are pure synth: they have to track the game every frame.
-//
-// The files' provenance and licences are listed in game/audio/SOURCES.md.
+// Voice one is recorded: ogg files under game/audio/, dealt from per-effect
+// pools. Voice two is a small WebAudio synth (swept oscillators, shaped
+// noise) that covers any pool whose files have not landed — or never do —
+// so the game is never silent and never waits on audio. The siren and the
+// engine hum are synth-only: they must track the game state every frame.
+// File provenance and licences: game/audio/SOURCES.md.
 
-// The recorded pools, as [pool name, file names] pairs. A pool with
-// several files deals one out at random per play, pitch-wobbled, so a
-// dozen punches in a row never sound like the same stamp twice.
-const POOLS = [
-  ['gun', ['se_gun.ogg']],
-  ['swing', ['se_swing1.ogg', 'se_swing2.ogg', 'se_swing3.ogg', 'se_swing4.ogg']],
-  ['punch', ['se_punch1.ogg', 'se_punch2.ogg', 'se_punch3.ogg', 'se_punch4.ogg']],
-  ['heavy', ['se_punch_heavy1.ogg', 'se_punch_heavy2.ogg', 'se_punch_heavy3.ogg', 'se_punch_heavy4.ogg']],
-  ['brake', ['se_brake.ogg']],
-  ['brakeLong', ['se_brake_long.ogg']],
-  ['door', ['se_cardoor.ogg']],
-  ['crash', ['se_crash.ogg']],
-];
-const POOL_FILES = Object.fromEntries(POOLS.map(([name, files]) => [name, files.map((f) => `audio/${f}`)]));
+// Pool name -> file names, relative to game/. Multi-file pools deal a
+// random member per play, pitch-wobbled, so repeats never sound stamped.
+const POOL_FILES = {
+  gun: ['audio/se_gun.ogg'],
+  swing: ['audio/se_swing1.ogg', 'audio/se_swing2.ogg', 'audio/se_swing3.ogg', 'audio/se_swing4.ogg'],
+  punch: ['audio/se_punch1.ogg', 'audio/se_punch2.ogg', 'audio/se_punch3.ogg', 'audio/se_punch4.ogg'],
+  heavy: ['audio/se_punch_heavy1.ogg', 'audio/se_punch_heavy2.ogg', 'audio/se_punch_heavy3.ogg', 'audio/se_punch_heavy4.ogg'],
+  brake: ['audio/se_brake.ogg'],
+  brakeLong: ['audio/se_brake_long.ogg'],
+  door: ['audio/se_cardoor.ogg'],
+  crash: ['audio/se_crash.ogg'],
+};
 
 export class SoundFX {
   constructor() {
-    this.ctx = null;          // the AudioContext, born on first unlock
-    this.master = null;       // everything's last gain before the destination
+    this.ctx = null;          // AudioContext, created on first unlock
+    this.master = null;       // final gain before the destination
     this.muted = false;
-    this.sirenNodes = null;   // { osc, lfo, gain } while the siren runs
-    this.engineNodes = null;  // { osc, gain } while the hum runs
-    this.fileBuffers = {};    // pool name -> decoded AudioBuffers, as they land
+    this.sirenNodes = null;   // { osc, lfo, gain } while the siren sounds
+    this.engineNodes = null;  // { osc, gain } while the engine hums
+    this.fileBuffers = {};    // pool name -> decoded buffers, as they land
     this.filesStarted = false;
   }
 
-  /** Build the context and buses, or wake them. Safe to call per gesture. */
+  /** Create the context and buses on first call; wake them afterwards. */
   unlock() {
     if (this.ctx === null) {
       const Ctor = window.AudioContext || window.webkitAudioContext;
@@ -53,10 +49,9 @@ export class SoundFX {
   }
 
   /**
-   * Pull the recorded files down and decode them strictly one at a time.
-   * Seventeen decodes in the unlock instant would hitch the first frames
-   * on a slow machine; spread out, the synth covers each pool until its
-   * files land. A 404 or a bad file just never joins its pool.
+   * Fetch and decode the recorded files strictly one at a time, 60 ms
+   * apart: seventeen decodes in the unlock instant would hitch the first
+   * frames on slow hardware. A failed file simply never joins its pool.
    */
   loadFiles() {
     if (this.filesStarted || !this.ctx) return;
@@ -66,24 +61,25 @@ export class SoundFX {
       this.fileBuffers[pool] = [];
       for (const url of urls) queue.push([pool, url]);
     }
-    let cursor = 0;
+    let next = 0;
     const pull = () => {
-      if (cursor >= queue.length) return;
-      const [pool, url] = queue[cursor];
-      cursor += 1;
+      if (next >= queue.length) return;
+      const [pool, url] = queue[next];
+      next += 1;
       fetch(url)
         .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(url))))
         .then((bytes) => this.ctx.decodeAudioData(bytes))
         .then((decoded) => { this.fileBuffers[pool].push(decoded); })
-        .catch(() => { /* the synth voice stands in for this file */ })
+        .catch(() => { /* the synth voice covers this file */ })
         .finally(() => setTimeout(pull, 60));
     };
     pull();
   }
 
   /**
-   * Speak a pool's recorded voice through the SE bus. False when the pool
-   * has nothing decoded yet — the caller then falls back to its synth.
+   * Play one recorded file from a pool through the SE bus. Returns false
+   * when nothing in the pool has decoded yet, so callers fall back to
+   * their synth patch.
    */
   playFile(pool, volume = 0.9) {
     if (!this.ctx || this.muted || !this.seMaster) return false;
@@ -100,7 +96,7 @@ export class SoundFX {
     return true;
   }
 
-  /** Short for "the recorded voice spoke" — the synth then stays quiet. */
+  /** True when the recorded voice spoke; the synth then stays silent. */
   recorded(pool, volume) {
     return this.playFile(pool, volume);
   }
@@ -111,15 +107,15 @@ export class SoundFX {
     if (this.seMaster) this.seMaster.gain.value = muted ? 0 : this.se;
   }
 
-  /** The SE bus level, 0..1, from the volume slider; music is separate. */
+  /** SE bus level 0..1 from the volume slider; music runs separately. */
   setSeVolume(v) {
     this.se = Math.max(0, Math.min(1, v));
     if (this.seMaster) this.seMaster.gain.value = this.se;
   }
 
-  // ---------------------------------------------------------- synth voices
+  /* -------------------------------------------------------- synth kit */
 
-  /** A single swept oscillator: wave, from/to Hz, length, level, delay. */
+  /** One oscillator sweeping from `from` Hz to `to` Hz under a decay envelope. */
   tone(type, from, to, seconds, volume = 0.2, delay = 0) {
     if (!this.ctx || this.muted) return;
     const at = this.ctx.currentTime + delay;
@@ -136,7 +132,7 @@ export class SoundFX {
     osc.stop(at + seconds + 0.02);
   }
 
-  /** A low-passed noise burst whose shape decays linearly sample by sample. */
+  /** A low-passed noise burst whose samples decay linearly to zero. */
   noise(seconds, volume = 0.25, cutoff = 1200, delay = 0) {
     if (!this.ctx || this.muted) return;
     const at = this.ctx.currentTime + delay;
@@ -158,13 +154,13 @@ export class SoundFX {
     src.start(at);
   }
 
-  /** Noise with a tone under it — the recipe behind most synth impacts. */
+  /** Noise burst with a tone underneath — the base recipe for impacts. */
   thud(noiseSeconds, noiseVolume, cutoff, type, from, to, toneSeconds, toneVolume) {
     this.noise(noiseSeconds, noiseVolume, cutoff);
     this.tone(type, from, to, toneSeconds, toneVolume);
   }
 
-  // ------------------------------------------------------------- one-shots
+  /* --------------------------------------------------------- one-shots */
 
   uiBlip() {
     this.tone('square', 660, 880, 0.07, 0.12);
@@ -180,16 +176,15 @@ export class SoundFX {
     this.thud(0.09, 0.3, 700, 'sine', 160, 60, 0.09, 0.2);
   }
 
-  /** A knockout-grade connect: deeper than a punch in both voices. */
+  /** The knockout-grade connect: lower and heavier than a plain punch. */
   punchHeavy() {
     if (this.recorded('heavy', 0.95)) return;
     this.thud(0.14, 0.42, 500, 'sine', 120, 45, 0.14, 0.3);
   }
 
   /**
-   * The whoosh at the START of every player punch, hit or miss (it once
-   * played only on a miss, at landing). Its level stays at 0.5 so that, as
-   * an every-punch sound, it sits under the connects (0.85–0.95).
+   * The swing whoosh, fired at the START of every player punch, hit or
+   * miss. Kept at 0.5 so an every-punch sound sits under the connects.
    */
   swing() {
     if (this.recorded('swing', 0.5)) return;
@@ -228,8 +223,8 @@ export class SoundFX {
   }
 
   /**
-   * Braking: the short recorded chirp for an ordinary stop, the long
-   * screech only for a hard stop from speed — vehicles.js picks which.
+   * Braking sounds: vehicles.js chooses the short chirp for an ordinary
+   * stop or the long screech for a hard stop from speed.
    */
   brake(long) {
     if (this.recorded(long ? 'brakeLong' : 'brake', 0.8)) return;
@@ -247,9 +242,9 @@ export class SoundFX {
     this.tone('square', 440, 440, 0.12, 0.16, 0.18);
   }
 
-  // ---------------------------------------------------------------- loops
+  /* -------------------------------------------------------------- loops */
 
-  /** The two-tone police siren: a triangle whose pitch a square LFO rocks. */
+  /** Police siren: a triangle carrier whose pitch a square LFO rocks. */
   setSiren(on) {
     if (!this.ctx) return;
     if (on && !this.sirenNodes) {
@@ -259,10 +254,10 @@ export class SoundFX {
       const rocker = this.ctx.createOscillator();
       rocker.type = 'square';
       rocker.frequency.value = 1.6;
-      const rockerDepth = this.ctx.createGain();
-      rockerDepth.gain.value = 160;
-      rocker.connect(rockerDepth);
-      rockerDepth.connect(carrier.frequency);
+      const depth = this.ctx.createGain();
+      depth.gain.value = 160;
+      rocker.connect(depth);
+      depth.connect(carrier.frequency);
       const out = this.ctx.createGain();
       out.gain.value = this.muted ? 0 : 0.045;
       carrier.connect(out);
@@ -277,19 +272,17 @@ export class SoundFX {
         nodes.osc.stop();
         nodes.lfo.stop();
       } catch {
-        /* the nodes were already down */
+        /* already stopped */
       }
     }
     if (on && this.sirenNodes) this.sirenNodes.gain.gain.value = this.muted ? 0 : 0.045;
   }
 
   /**
-   * The engine hum, pitched by speedRatio (0..1 of top speed). Its level
-   * (0.16 + ratio × 0.14 into the SE bus) was set by measurement: at the
-   * old 0.10 ceiling the real BGM masked the hum to inaudibility even
-   * though the wiring was sound — nodes alive, pitch tracking speed. It
-   * stays routed through seMaster, so the SE slider and the mute keep
-   * their authority over it.
+   * Engine hum, pitched by speedRatio (0..1). Level 0.16 + ratio × 0.14
+   * into the SE bus, set by measurement: at the old 0.10 ceiling the BGM
+   * masked the hum completely even with the wiring sound. Routing stays
+   * through seMaster, so the SE slider and the mute keep authority.
    */
   setEngine(on, speedRatio = 0) {
     if (!this.ctx) return;
@@ -323,7 +316,7 @@ export class SoundFX {
       try {
         nodes.osc.stop();
       } catch {
-        /* the node was already down */
+        /* already stopped */
       }
     }
   }
