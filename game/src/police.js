@@ -1,55 +1,69 @@
-// The wanted system and Palmera PD. Crimes add heat (witnessed crimes add more);
-// heat lights up stars; stars decide how many police cars hunt the player. Police
-// cars chase and ram, officers climb out near a player on foot and fill the bust
-// meter by staying close; heat cools when no officer is near, and the Spray 'n Go
-// garage wipes it for a fee (handled in main.js). Police behaviour is deliberately
-// readable: fast in a straight line, clumsy in corners, hopeless off-road.
+// Palmera PD and the wanted system. Heat is the currency: crimes add it
+// (more when somebody saw the crime), heat lights stars, and stars decide
+// how many cruisers hunt the player. Cruisers ram a player in a car, but
+// against a man on foot they stop short and put an officer out — the bust
+// meter fills while an officer (or a stopped cruiser) stays close. Heat
+// bleeds away only while no unit is near enough to watch, and the Spray
+// 'n Go wipe lives in main.js. Police driving is meant to be readable:
+// quick in a straight line, clumsy in corners, lost off-road.
 import { CAR, HEAT_THRESHOLDS } from './config.js';
 import { isOnRoad } from './city.js';
 import { moveFreeCar, removeCar, spawnPoliceCar, updatePoliceLights } from './vehicles.js';
 import { spawnPed } from './people.js';
 
-/** How many stars a heat value lights up. */
+/** How many stars a heat value lights. */
 export function starsFor(heat) {
-  let stars = 0;
-  for (const threshold of HEAT_THRESHOLDS) if (heat >= threshold) stars += 1;
-  return stars;
+  let lit = 0;
+  for (const threshold of HEAT_THRESHOLDS) {
+    if (heat >= threshold) lit += 1;
+  }
+  return lit;
 }
 
-// Reused every frame: the active cruiser list. It used to be rebuilt with
-// filter() on each update, which allocated an array (and a closure) 60 times a
-// second; the list never escapes updatePolice.
-const policeCars = [];
+/** Shortest signed arc from a to b, in (-PI, PI]. */
+function angleDelta(a, b) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
 
-/** Was anyone in a position to see the crime at (x, y)? Cops see far, citizens less. */
+/** Clamp a per-frame change into [lo, hi]. */
+function clampDelta(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+/**
+ * Could anyone see a crime committed at (x, y)? Officers and cruisers
+ * spot at 470; citizens at 250. Downed and seated people see nothing.
+ */
 function witnessed(g, x, y) {
+  const reaches = (ox, oy, range) => Math.hypot(ox - x, oy - y) < range;
   for (const ped of g.peds) {
     if (ped.state === 'down' || ped.state === 'inCar') continue;
-    const range = ped.role === 'cop' ? 470 : 250;
-    if (Math.hypot(ped.x - x, ped.y - y) < range) return true;
+    if (reaches(ped.x, ped.y, ped.role === 'cop' ? 470 : 250)) return true;
   }
   for (const car of g.cars) {
-    if (car.kind === 'police' && Math.hypot(car.x - x, car.y - y) < 470) return true;
+    if (car.kind === 'police' && reaches(car.x, car.y, 470)) return true;
   }
   return false;
 }
 
 /**
- * Add heat for a crime at (x, y). Unwitnessed crimes count for a third. Crimes
- * against the police themselves are always fully witnessed.
+ * Add heat for a crime at (x, y). An unseen crime counts for about a
+ * third; a crime against the police themselves is always fully seen.
+ * At five stars the PD is already giving everything, so extra heat
+ * counts for less.
  */
 export function addHeat(g, amount, x, y, { force = false } = {}) {
-  if (g.stars >= 5 && amount > 0) amount *= 0.4; // already at maximum attention
-  const seen = force || witnessed(g, x, y);
-  g.heat += seen ? amount : amount * 0.34;
+  if (g.stars >= 5 && amount > 0) amount *= 0.4;
+  g.heat += (force || witnessed(g, x, y)) ? amount : amount * 0.34;
   const stars = starsFor(g.heat);
-  if (stars > g.stars) {
-    g.events.push({ type: 'starup', stars });
-  }
+  if (stars > g.stars) g.events.push({ type: 'starup', stars });
   g.stars = stars;
 }
 
-/** Pick a road point 700–900px from the player for a police spawn. */
+/** A road point 700–900 out from the player, for a fresh cruiser. */
 function spawnPoint(g) {
   for (let tries = 0; tries < 10; tries += 1) {
     const angle = g.rng.range(0, Math.PI * 2);
@@ -63,149 +77,136 @@ function spawnPoint(g) {
   return null;
 }
 
-/** Deploy distance: a police car hunting a man on foot stops this far
- * short of him and sends its officer out. Against an on-foot player
- * the car is never the weapon — the arrest happens on foot. */
+/** Brake a cruiser to a standstill over the frame and roll it. */
+function rollToStop(g, car, dt) {
+  const step = 500 * dt;
+  car.speed = Math.abs(car.speed) <= step ? 0 : car.speed - Math.sign(car.speed) * step;
+  moveFreeCar(g, car, dt);
+}
+
+/**
+ * Shared cruiser steering: reverse out when wedged, otherwise ease the
+ * speed toward `wanted` and the heading toward the target bearing.
+ * `stuckRange` is the distance beyond which crawling counts as stuck —
+ * near a planned stop, crawling is the job, not a wedge.
+ */
+function steerCruiser(car, dt, diff, wanted, distNow, stuckRange) {
+  if (car.reverseT > 0) {
+    car.reverseT -= dt;
+    car.speed = -150;
+    car.angle -= Math.sign(diff || 1) * 1.8 * dt;
+    return;
+  }
+  car.speed += clampDelta(wanted - car.speed, -500 * dt, 300 * dt);
+  car.angle += clampDelta(diff, -2.5 * dt, 2.5 * dt);
+  if (Math.abs(car.speed) < 22 && distNow > stuckRange) {
+    car.stuckT = (car.stuckT ?? 0) + dt;
+    if (car.stuckT > 1.1) {
+      car.reverseT = 0.55;
+      car.stuckT = 0;
+    }
+  } else {
+    car.stuckT = 0;
+  }
+}
+
+/** A cruiser hunting a man on foot stops this far short of him. */
 const DEPLOY_DIST = 95;
 
 /**
- * Steer one police car after an ON-FOOT player: approach, brake on a
- * curve that lands the stop DEPLOY_DIST short of him, and put the
- * officer out (the deployment rule the ram path always had, but could
- * never reach — the car arrived AT the player at full speed and the
- * on-foot hit finished him long before any arrest). While the officer
- * works, the car waits where it stopped; if the player leaves the
- * car's neighbourhood entirely, the car repositions to a fresh stop
- * near him and may deploy again once no officer is already on him.
- * The braking curve (brake 300) sits well under what the speed
- * approach can deliver (500), so the stop tracks with room to spare;
- * and updatePlayerCarHits refuses police-car damage to an on-foot
- * player outright, so even a forced contact cannot hurt him.
+ * Hunt a player ON FOOT: the car is never the weapon here. It brakes on
+ * a curve that stops DEPLOY_DIST short, the officer climbs out, and the
+ * arrest happens on foot. While the officer works, the car holds its
+ * stop; if the player quits the neighbourhood entirely, the car is free
+ * to reposition and deploy again once no officer is already on him.
+ * The braking curve (brake 300) sits well under what the approach can
+ * deliver (500), so the stop tracks with room to spare — and the hit
+ * rules refuse police-car damage to an on-foot player outright anyway.
  */
 function chaseOnFoot(g, car, dt) {
   const p = g.player;
-  const dx = p.x - car.x;
-  const dy = p.y - car.y;
-  const dist = Math.hypot(dx, dy);
+  const dist = Math.hypot(p.x - car.x, p.y - car.y);
   if (car.officerSpawned) {
     if (dist < 380) {
-      // The officer is out and working: the car holds its stop.
-      const step = 500 * dt;
-      car.speed = Math.abs(car.speed) <= step ? 0 : car.speed - Math.sign(car.speed) * step;
-      moveFreeCar(g, car, dt);
+      rollToStop(g, car, dt);
       return;
     }
-    // The player is long gone from this car: it may deploy again —
-    // once no officer is already working him — so the pursuit renews
-    // at his new position instead of camping an empty street. (The
-    // abandoned officer keeps his own lifecycle: he stands down when
-    // the heat dies and despawns when left far behind.)
+    // Long gone from this car: it may deploy again where he went, once
+    // no officer is already working him. The abandoned officer keeps
+    // his own lifecycle (stand-down, then despawn when left behind).
     const officerBusy = g.peds.some((ped) => ped.role === 'cop' && ped.state === 'fight'
       && Math.hypot(ped.x - p.x, ped.y - p.y) < 470);
     if (!officerBusy) car.officerSpawned = false;
   }
-  const desired = Math.atan2(dy, dx);
-  let diff = desired - car.angle;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  if (car.reverseT > 0) {
-    car.reverseT -= dt;
-    car.speed = -150;
-    car.angle -= Math.sign(diff || 1) * 1.8 * dt;
-  } else {
-    const top = CAR.policeSpeed * (g.stars >= 3 ? 1 : 0.82);
-    const curve = Math.sqrt(2 * 300 * Math.max(0, dist - DEPLOY_DIST));
-    let wanted = Math.min(top, curve);
-    if (Math.abs(diff) > 2.1) wanted = Math.min(wanted, 110);
-    car.speed += Math.max(-500 * dt, Math.min(300 * dt, wanted - car.speed));
-    car.angle += Math.max(-2.5 * dt, Math.min(2.5 * dt, diff));
-    // The ram path's stuck detection, scoped to the approach: near
-    // the stop point a slow car is doing its job, not stuck.
-    if (Math.abs(car.speed) < 22 && dist > 170) {
-      car.stuckT = (car.stuckT ?? 0) + dt;
-      if (car.stuckT > 1.1) {
-        car.reverseT = 0.55;
-        car.stuckT = 0;
-      }
-    } else {
-      car.stuckT = 0;
-    }
-  }
+  const diff = angleDelta(car.angle, Math.atan2(p.y - car.y, p.x - car.x));
+  const top = CAR.policeSpeed * (g.stars >= 3 ? 1 : 0.82);
+  const curve = Math.sqrt(2 * 300 * Math.max(0, dist - DEPLOY_DIST));
+  let wanted = Math.min(top, curve);
+  if (Math.abs(diff) > 2.1) wanted = Math.min(wanted, 110);
+  steerCruiser(car, dt, diff, wanted, dist, 170);
   moveFreeCar(g, car, dt);
-  // The officer climbs out once the car has stopped near the player.
-  if (!car.officerSpawned && Math.abs(car.speed) < 65) {
-    if (Math.hypot(p.x - car.x, p.y - car.y) < 105) {
-      car.officerSpawned = true;
-      const officer = spawnPed(g, { role: 'cop', x: car.x + 20, y: car.y + 10 });
-      officer.state = 'fight';
-      // The stand-down walk (people.js 'leave') goes back to this car,
-      // and this car holds at the kerb for him once the heat dies.
-      officer.ride = car;
-      car.officer = officer;
-      g.events.push({ type: 'officer' });
-    }
+  // Stopped near him, with no officer out yet: deploy.
+  if (!car.officerSpawned && Math.abs(car.speed) < 65
+    && Math.hypot(p.x - car.x, p.y - car.y) < 105) {
+    car.officerSpawned = true;
+    const officer = spawnPed(g, { role: 'cop', x: car.x + 20, y: car.y + 10 });
+    officer.state = 'fight';
+    // The stand-down walk (people.js 'leave') returns to this car, and
+    // this car holds at the kerb for him once the heat dies.
+    officer.ride = car;
+    car.officer = officer;
+    g.events.push({ type: 'officer' });
   }
 }
 
-/** Steer one police car after the player for a frame. */
+/** Hunt the player for one frame, in whichever mode fits his state. */
 function chasePlayer(g, car, dt) {
   const p = g.player;
-  // Chasing is not a drive-off either: the stall watch in the
-  // stand-down branch starts fresh when the heat next dies.
+  // Chasing is not a drive-off: the stall watch in the stand-down
+  // branch starts fresh when the heat next dies.
   car.offAnchor = null;
   car.offWindow = 0;
   car.offStuck = 0;
-  // On foot, the arrest happens on foot: the car stops and deploys.
-  // In a car, the chase is a chase — ramming included — as before.
   if (p.state === 'foot') {
     chaseOnFoot(g, car, dt);
     return;
   }
-  const tx = p.x + Math.cos(p.angle) * (p.state === 'car' ? 0 : 0);
-  const ty = p.y + Math.sin(p.angle) * (p.state === 'car' ? 0 : 0);
-  const desired = Math.atan2(ty - car.y, tx - car.x);
-  let diff = desired - car.angle;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  if (car.reverseT > 0) {
-    car.reverseT -= dt;
-    car.speed = -150;
-    car.angle -= Math.sign(diff || 1) * 1.8 * dt;
-  } else {
-    const top = CAR.policeSpeed * (g.stars >= 3 ? 1 : 0.82);
-    const wanted = Math.abs(diff) > 2.1 ? 110 : top;
-    car.speed += Math.max(-500 * dt, Math.min(300 * dt, wanted - car.speed));
-    car.angle += Math.max(-2.5 * dt, Math.min(2.5 * dt, diff));
-    if (Math.abs(car.speed) < 22 && Math.hypot(tx - car.x, ty - car.y) > 90) {
-      car.stuckT = (car.stuckT ?? 0) + dt;
-      if (car.stuckT > 1.1) {
-        car.reverseT = 0.55;
-        car.stuckT = 0;
-      }
-    } else {
-      car.stuckT = 0;
-    }
-  }
+  // In a car it is a chase, ramming included, exactly as it always was.
+  const diff = angleDelta(car.angle, Math.atan2(p.y - car.y, p.x - car.x));
+  const top = CAR.policeSpeed * (g.stars >= 3 ? 1 : 0.82);
+  const wanted = Math.abs(diff) > 2.1 ? 110 : top;
+  const dist = Math.hypot(p.x - car.x, p.y - car.y);
+  steerCruiser(car, dt, diff, wanted, dist, 90);
   moveFreeCar(g, car, dt);
 }
 
-/** The whole wanted system for one frame: spawning, chasing, cooling, busting. */
+// The active cruiser list, rebuilt in place each frame. It used to be a
+// fresh filter() per update — an allocation and a closure sixty times a
+// second — for a list that never escapes updatePolice.
+const policeCars = [];
+
+/** One frame of the wanted system: cooling, the fleet, the bust meter. */
 export function updatePolice(g, dt, time) {
   const p = g.player;
   g.stars = starsFor(g.heat);
-  // Cooling: heat drains while no police unit is close enough to watch.
-  // A wrecked cruiser watches nothing — it cannot hold the cooling open
-  // (the fleet count below already refuses to count it as a unit).
+
+  // --- Cooling. Heat drains only while nothing is close enough to
+  // watch: the nearest live cruiser or fighting officer sets the range.
+  // A wrecked cruiser watches nothing and holds nothing open.
   let nearest = Infinity;
   for (const car of g.cars) {
-    if (car.kind === 'police' && !car.wrecked) nearest = Math.min(nearest, Math.hypot(car.x - p.x, car.y - p.y));
+    if (car.kind === 'police' && !car.wrecked) {
+      nearest = Math.min(nearest, Math.hypot(car.x - p.x, car.y - p.y));
+    }
   }
   for (const ped of g.peds) {
-    if (ped.role === 'cop' && ped.state === 'fight') nearest = Math.min(nearest, Math.hypot(ped.x - p.x, ped.y - p.y));
+    if (ped.role === 'cop' && ped.state === 'fight') {
+      nearest = Math.min(nearest, Math.hypot(ped.x - p.x, ped.y - p.y));
+    }
   }
   g.policeNear = nearest < 470;
-  // `cooling` is the HUD's "losing them" signal: it is true exactly while
-  // heat is draining, so the blinking stars never lie about the state.
+  // `cooling` is the HUD's losing-them signal: true exactly while heat
+  // is draining, so the blinking stars never lie about the state.
   g.cooling = false;
   if (nearest > 380) {
     g.coolT += dt;
@@ -214,35 +215,27 @@ export function updatePolice(g, dt, time) {
       g.heat = Math.max(0, g.heat - 22 * dt);
       g.stars = starsFor(g.heat);
       g.cooling = true;
-      // A chase ended by stealth is an event worth announcing: fire at
-      // the moment the drain winks out the last star (heat still has a
-      // little left to bleed off, but the PD gives up at zero stars —
-      // that is when its cars turn away). The Spray 'n Go wipe and
-      // busted/wasted set heat directly in main.js and never come
-      // through here, so they stay banner-free.
+      // Losing the last star to stealth is worth announcing. The paint
+      // wipe and busted/wasted set heat directly in main.js and never
+      // pass through here, so they stay banner-free.
       if (prevStars > 0 && g.stars === 0) g.events.push({ type: 'heatoff' });
     }
   } else {
     g.coolT = 0;
   }
 
-  // Maintain the fleet: one car per star, up to four. A police car the
-  // player has taken is no longer a unit: it must never chase its own
-  // driver, count toward the fleet, or drive off and despawn with the
-  // player in it. (finishEnterCar converts its kind too; this filter is
-  // the second lock on the same door.)
+  // --- The fleet. One live cruiser per star, up to four. A cruiser the
+  // player has taken is no longer a unit: it never counts, never chases
+  // its own driver, never drives off with him in it. A wrecked unit is
+  // out of the response too — it burns where it died until the wreck
+  // system sinks it — but it stays in the list below for its lights and
+  // its stopped-car bust pressure, as it behaved while the heat was up.
   policeCars.length = 0;
   for (const c of g.cars) {
     if (c.kind === 'police' && !c.touched && c.occupant !== 'player') policeCars.push(c);
   }
   const desired = g.stars === 0 ? 0 : Math.min(4, g.stars);
   g.policeSpawnCd -= dt;
-  // A wrecked unit is out of the response: it burns where it died until
-  // the wreck system sinks it away, and it must not count toward the
-  // fleet — otherwise a street littered with burned-out cruisers would
-  // mute the next response entirely. (It stays in policeCars for the
-  // loop below — lights, and stopped-car bust pressure — exactly as a
-  // wrecked unit behaved while the heat was up before.)
   let activeUnits = 0;
   for (const c of policeCars) if (!c.wrecked) activeUnits += 1;
   if (activeUnits < desired && g.policeSpawnCd <= 0) {
@@ -252,45 +245,38 @@ export function updatePolice(g, dt, time) {
       g.policeSpawnCd = 2.2;
     }
   }
+
   for (const car of policeCars) {
     if (g.stars === 0) {
       if (car.wrecked) {
-        // A wrecked unit cannot drive off. It burns where it died and
-        // the wreck system (updateWrecks in vehicles.js) sinks it away
-        // once the fire is out — no instant tow-away pop the moment the
-        // heat clears. (Player-owned wrecks never reach this filter.)
+        // A wrecked unit cannot drive off; it burns where it died. (It
+        // also skips its lights update — it is out of the story.)
         continue;
       }
-      // A car whose officer is walking back to it holds at the kerb
-      // until he climbs in: driving off without him would strand a
-      // stood-down officer in the street. (removePed clears
-      // car.officer the moment he boards or otherwise leaves the
-      // world, and the 'leave' state's own time cap bounds the wait,
-      // so this hold always ends.) A knocked-down officer who will
-      // get back up is waited for too; a dead one is not.
+      // A car whose officer is walking back holds at the kerb until he
+      // climbs in — driving off would strand him. A knocked-down
+      // officer who will get back up is waited for; a dead one is not.
+      // removePed frees car.officer the moment he boards or leaves the
+      // world, and the 'leave' state's own cap bounds the wait.
       const off = car.officer;
       const officerReturning = !!off && g.peds.includes(off)
         && (off.state === 'leave' || (off.state === 'down' && off.hp > 0));
       if (officerReturning) {
-        const step = 500 * dt;
-        car.speed = Math.abs(car.speed) <= step ? 0 : car.speed - Math.sign(car.speed) * step;
-        moveFreeCar(g, car, dt);
-        // Holding at the kerb is not a drive-off: the stall watch in
-        // the drive-off branch starts fresh once he boards.
+        rollToStop(g, car, dt);
+        // Holding is not a drive-off: the stall watch starts fresh
+        // once he boards.
         car.offAnchor = null;
         car.offWindow = 0;
         car.offStuck = 0;
       } else {
-        // The heat is gone: drive off and despawn in the distance.
-        // The drive goes through moveFreeCar — the collision-aware
-        // move the hold above already uses — so a withdrawing cruiser
-        // is stopped and slid by buildings like any other car. (It
-        // used to integrate its position directly here and ghost
-        // straight through walls.) The removal stays distance-based,
+        // The heat is gone: drive off and despawn in the distance. The
+        // drive goes through moveFreeCar — the collision-aware move —
+        // so a withdrawing cruiser is stopped and slid by buildings
+        // like any other car. (It used to integrate its position
+        // directly and ghost through walls.) Removal is distance-based,
         // with one bound: a cruiser wedged against a facade makes no
         // progress, so its stall is measured in 1-second windows and
-        // after ~4 game-seconds of going nowhere it is towed out of
-        // the world — a despawn either way, just sooner.
+        // after ~4 game-seconds of going nowhere it is towed out.
         car.speed = Math.min(CAR.trafficSpeed, car.speed + 200 * dt);
         moveFreeCar(g, car, dt);
         if (Math.hypot(car.x - p.x, car.y - p.y) > 780) {
@@ -314,24 +300,26 @@ export function updatePolice(g, dt, time) {
     } else if (!car.wrecked) {
       chasePlayer(g, car, dt);
     }
-    // A wrecked unit is never driven, at any heat: its driver is done,
-    // it burns where it died (the stars === 0 branch above already
-    // refuses to drive it off), and only its lights still update.
+    // A wrecked unit is never driven, at any heat — only its lights
+    // still update.
     updatePoliceLights(car, time);
   }
 
-  // The bust meter: an officer (or a stopped police car) staying close fills it.
+  // --- The bust meter. An officer on top of a player on foot fills it;
+  // against a stopped player car, a close cruiser or officer does.
   let pressure = false;
   if (p.state === 'foot') {
     for (const ped of g.peds) {
-      if (ped.role === 'cop' && ped.state === 'fight' && Math.hypot(ped.x - p.x, ped.y - p.y) < 32) pressure = true;
+      if (ped.role === 'cop' && ped.state === 'fight'
+        && Math.hypot(ped.x - p.x, ped.y - p.y) < 32) pressure = true;
     }
   } else if (p.car && Math.abs(p.car.speed) < 30) {
     for (const car of policeCars) {
       if (Math.hypot(car.x - p.x, car.y - p.y) < 52) pressure = true;
     }
     for (const ped of g.peds) {
-      if (ped.role === 'cop' && ped.state === 'fight' && Math.hypot(ped.x - p.x, ped.y - p.y) < 40) pressure = true;
+      if (ped.role === 'cop' && ped.state === 'fight'
+        && Math.hypot(ped.x - p.x, ped.y - p.y) < 40) pressure = true;
     }
   }
   g.bustProgress = Math.max(0, Math.min(g.bustMax, g.bustProgress + (pressure ? dt : -dt * 0.8)));

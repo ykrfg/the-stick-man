@@ -1,8 +1,8 @@
-// People: the player on foot and every pedestrian, rival, officer and story
-// character in Palmera. Each person is a small state machine (walk the sidewalks,
-// flee from violence, fight when hostile, lie down when beaten) riding on one of
-// the supple stick figures from stick3d.js. Movement and collisions are solved in
-// the flat (x, y) world; the figure's group is placed at (x, 0, y) each frame.
+// The people of Palmera: the player on foot and every pedestrian, rival,
+// officer and story character. Each person is a small state machine — walk
+// the sidewalks, flee violence, fight when hostile, lie down when beaten —
+// riding on one of the supple stick figures from stick3d.js. Brains work in
+// the flat (x, y) world; syncFigure places the figure at (x, 0, y).
 import { PLAYER, ROAD, WORLD } from './config.js';
 import { clampToWorld, resolveCircleCollision } from './city.js';
 import { createFigure } from './stick3d.js';
@@ -10,14 +10,18 @@ import { makeTextSprite } from './world3d.js';
 
 const SIDEWALK_OFFSET = 71;
 
-// Every crossing line, built once from the (constant) road grid. walkSidewalk
-// used to rebuild these two arrays with flatMap for every walking pedestrian
-// on every frame.
+// The crossing lines of the sidewalk graph, built once from the constant
+// road grid. (walkSidewalk used to rebuild these with flatMap for every
+// walker on every frame.)
 const CROSS_LINES_Y = ROAD.streets.flatMap((s) => [s - SIDEWALK_OFFSET, s + SIDEWALK_OFFSET]);
 const CROSS_LINES_X = ROAD.avenues.flatMap((a) => [a - SIDEWALK_OFFSET, a + SIDEWALK_OFFSET]);
 
-/** Sidewalk lines run beside every road: avenue lines are constant-x, street lines constant-y. */
-function randomSidewalkPoint(rng) {
+/**
+ * A random spot on the sidewalk graph: a line running beside an avenue
+ * (constant x, walking along y) or beside a street (constant y, along x),
+ * a random position along it, and a random walking direction.
+ */
+function sidewalkSpot(rng) {
   if (rng.chance(0.55)) {
     const avenue = rng.pick(ROAD.avenues);
     const line = avenue + (rng.chance(0.5) ? SIDEWALK_OFFSET : -SIDEWALK_OFFSET);
@@ -30,24 +34,25 @@ function randomSidewalkPoint(rng) {
 
 let pedSeq = 0;
 
-/**
- * Create one person and add its figure to the scene. role decides the behaviour
- * and the look: 'ped' (citizen, mixed fills), 'rival' (black, hostile), 'cop'
- * (black with a blue cap, arrests), 'shade' (black, the getaway passenger),
- * 'bruno' (black, stands at the diner and hands out missions). The `armed`
- * option puts the visible pistol in the right hand (mission gunmen); it
- * changes the look and the fight pose, never the mechanics.
- */
-// Pedestrian A-type heads wear warm off-whites — close to the hero's look,
-// but never his pure #ffffff: in a crowd, the one PURE white head is the
-// player's. The slight per-person variation keeps the crowd individual.
+// Pedestrian A-type heads wear warm off-whites — near the hero's look but
+// never his pure #ffffff. In a crowd, the one PURE white head is the
+// player's; the slight per-person variation keeps the crowd individual.
 const PED_HEAD_TINTS = [0xe7dfc9, 0xdfd7c2, 0xe9e3d3, 0xdcd4bd, 0xe2dbc9];
 
+/**
+ * Create one person and add its figure to the scene. The role decides
+ * behaviour and look: 'ped' (citizen, mixed fills), 'rival' (black,
+ * hostile), 'cop' (black with a blue cap, arrests), 'shade' (black, the
+ * getaway passenger), 'bruno' (black, stands at the diner handing out
+ * missions). With no position given, the person starts on a random
+ * sidewalk. The `armed` option puts the visible pistol prop in the right
+ * hand (mission gunmen): a look and a fight pose, never a mechanic.
+ */
 export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex = -1, hp = null, chase = null, punchRate = null, armed = false } = {}) {
   const rng = g.rng;
   let spot = { x, y, axis: 'y', line: x, dir: 1 };
   if (x === 0 && y === 0) {
-    spot = randomSidewalkPoint(rng);
+    spot = sidewalkSpot(rng);
     x = spot.x;
     y = spot.y;
   }
@@ -73,44 +78,42 @@ export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex
     dir: spot.dir,
     speedNow: 0,
     turnCd: rng.range(0, 1),
-    // Sidewalk anti-deadlock state (walkSidewalk): how long a building
-    // face has been cancelling this walker's step outright (a quarter
-    // second of it turns him back the way he came), and the lateral
-    // detour offset the building resolver last imposed on his line.
+    // Sidewalk anti-deadlock state: how long a building face has been
+    // cancelling this walker's step outright (a quarter second of it
+    // turns him back), and the lateral detour offset the building
+    // resolver last imposed on his line.
     blockedT: 0,
     lineOff: 0,
     scaredT: 0,
     downT: 0,
-    // Fighter car-dodge (updatePeds): the dive's remaining time, its
-    // cooldown, and its burst velocity. Ordinary peds never use them.
+    // Fighter car-dodge: the dive's remaining time, its cooldown, and
+    // its burst velocity. Ordinary peds never use these.
     dodgeT: 0,
     dodgeCd: 0,
     dodgeX: 0,
     dodgeY: 0,
     punchCd: rng.range(0.2, 0.7),
     // The cruiser that put this officer out (police.js sets it at
-    // deployment; null for everyone else). The stand-down walk in the
-    // 'leave' state goes back to it. leaveT is that state's clock:
-    // a hard cap so no officer can ever be left standing in a state
-    // with no live behaviour.
+    // deployment; null for everyone else). The 'leave' stand-down walk
+    // goes back to it. leaveT is that state's clock — a hard cap, so no
+    // officer can ever be left standing in a state with no behaviour.
     ride: null,
     leaveT: 0,
-    // Elite-fighter overrides (mission escorts and raid crews): a faster
-    // chase and a faster punch than the rank and file, when the spawn
-    // asks for them. Null keeps the role defaults in the fight case.
+    // Elite-fighter overrides (mission escorts and raid crews): a
+    // faster chase and a faster punch than the rank and file, when the
+    // spawn asks for them. Null keeps the role defaults in 'fight'.
     chase,
     punchRate,
-    // Visibly carries the pistol (mission gunmen). A look, not a
-    // mechanic: syncFigure raises the gun arm in the fight state, and
-    // the fist does the rest exactly as before.
+    // Visibly carries the pistol (mission gunmen). syncFigure raises the
+    // gun arm in the fight state; the fist does the rest as before.
     armed: !!armed,
     exprT: 0,
     baseExpr: role === 'ped' ? 'neutral' : 'angry',
   };
-  // Mission-critical people (anyone spawned with a name: Bruno, Shade) carry
-  // a floating name label, shown while the player is near — a black stick
-  // figure is otherwise indistinguishable from every other black stick
-  // figure, which is how "come back for Shade" lost its meaning.
+  // Anyone spawned with a name (Bruno, Shade) carries a floating name
+  // label, shown at conversational range — a black stick figure is
+  // otherwise indistinguishable from every other black stick figure,
+  // which is how "come back for Shade" lost its meaning.
   if (name) {
     const label = makeTextSprite(name, { size: 40, color: '#ffd94d', scale: 0.6 });
     label.position.set(0, 47, 0);
@@ -124,7 +127,7 @@ export function spawnPed(g, { role = 'ped', x = 0, y = 0, name = null, shopIndex
   return ped;
 }
 
-/** Fill the sidewalks with citizens at the start of a run. */
+/** Fill the sidewalks with citizens at the start of a run, plus Bruno. */
 export function spawnPeds(g, count = 15) {
   for (let i = 0; i < count; i += 1) {
     const ped = spawnPed(g, { role: 'ped' });
@@ -143,11 +146,11 @@ export function spawnPeds(g, count = 15) {
   return bruno;
 }
 
-/** Remove a person from the world (despawned, or a passenger who climbed in). */
+/** Remove a person from the world (despawned, or climbed into a car). */
 export function removePed(g, ped) {
-  // A departing officer frees his cruiser: with nobody left to pick
-  // up, the car stops holding at the kerb and drives off like any
-  // unit whose heat died (police.js reads car.officer).
+  // A departing officer frees his cruiser: with nobody left to pick up,
+  // the car stops holding at the kerb and drives off like any unit
+  // whose heat died (police.js reads car.officer).
   if (ped.ride && ped.ride.officer === ped) {
     ped.ride.officer = null;
     ped.ride.officerSpawned = false;
@@ -158,30 +161,28 @@ export function removePed(g, ped) {
 }
 
 /**
- * Mission-critical people are essential: Bruno, the job desk, and
- * Shade, mission 2's passenger. An essential man flinches at harm but
- * can never be beaten down, run over into the 14-second removal, or
- * turned into a fighter who abandons his post — every protection in
- * this file and in main.js's runover heat keys off this one test.
+ * Mission-critical people are essential: Bruno, the job desk, and Shade,
+ * mission 2's passenger. An essential man flinches at harm but can never
+ * be beaten down, run over into removal, or turned into a fighter who
+ * abandons his post — every protection in this file, and main.js's
+ * runover heat, keys off this one test.
  */
 export function isEssential(ped) {
   return ped.role === 'bruno' || ped.role === 'shade';
 }
 
 /**
- * Damage a person. Beaten people fall (state 'down') and may drop cash; the events
- * are pushed to g.events so main.js can add heat, sound and messages. Returns true
+ * Damage a person. The beaten fall ('down') and may drop cash; events go
+ * to g.events so main.js can add heat, sound and messages. Returns true
  * when this hit put them down.
  */
 export function hurtPed(g, ped, damage, { byPlayer = true } = {}) {
   if (ped.state === 'down' || ped.state === 'inCar') return false;
   if (isEssential(ped)) {
-    // Essential: he flinches, but he can never be beaten down, run
-    // over into the 14-second removal, or turned into a fighter who
-    // abandons his post. Without this, one car through the diner door
-    // deleted Bruno for good while the "Talk to Bruno" prompt kept
-    // firing at the empty spot his stale reference pointed to — and
-    // one car past Club Neon did the same to Shade mid-mission.
+    // Flinch only. Without this, one car through the diner door deleted
+    // Bruno for good while the "Talk to Bruno" prompt kept firing at
+    // the empty spot his stale reference pointed to — and one car past
+    // Club Neon did the same to Shade mid-mission.
     ped.fig.setExpression('frustrated');
     ped.exprT = 0.7;
     return false;
@@ -197,10 +198,8 @@ export function hurtPed(g, ped, damage, { byPlayer = true } = {}) {
   if (ped.hp <= 0) {
     ped.state = 'down';
     ped.downT = 0;
-    if (byPlayer && ped.role !== 'cop') {
-      if (g.rng.chance(0.55)) {
-        g.events.push({ type: 'cashdrop', x: ped.x, y: ped.y, amount: g.rng.int(8, 30) });
-      }
+    if (byPlayer && ped.role !== 'cop' && g.rng.chance(0.55)) {
+      g.events.push({ type: 'cashdrop', x: ped.x, y: ped.y, amount: g.rng.int(8, 30) });
     }
     return true;
   }
@@ -209,14 +208,13 @@ export function hurtPed(g, ped, damage, { byPlayer = true } = {}) {
 
 /**
  * A car ran someone over (the runover event from vehicles.js). Ordinary
- * pedestrians take the full historical damage. FIGHTERS — the mission
+ * pedestrians take the full historical damage. FIGHTERS — mission
  * collectors and officers on foot — take a scaled-down hit and are
  * KNOCKED DOWN instead: the down state stands them back up into the
- * fight after a couple of seconds, so mowing a collection fight down
- * with a car buys the driver a knockdown, not a kill. Only a very fast
- * impact or repeated hits (each ~8 + speed x 0.075, so three-plus
- * solid connections) actually finish a fighter. Bruno keeps his
- * flinch-only path through hurtPed.
+ * fight after a couple of seconds, so mowing a fight down with a car
+ * buys a knockdown, not a kill. Only a very fast impact or repeated
+ * hits (each ~8 + speed x 0.075, so three-plus solid connections)
+ * actually finish a fighter. Bruno keeps his flinch-only path.
  */
 export function runOverPed(g, ped, speed, byPlayer = true) {
   if (ped.role === 'rival' || ped.role === 'cop') {
@@ -231,33 +229,39 @@ export function runOverPed(g, ped, speed, byPlayer = true) {
   hurtPed(g, ped, 30 + speed * 0.16, { byPlayer });
 }
 
+/** Shortest signed arc from angle a to angle b, in (-PI, PI]. */
+function turnArc(a, b) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
 /** Place a figure in the world and advance its pose. */
 export function syncFigure(ent, dt, time, groundY = 0) {
   ent.fig.group.position.set(ent.x, groundY, ent.y);
   ent.fig.group.rotation.y = -ent.angle;
   ent.fig.target.speed = Math.min(1.4, ent.speedNow / 200);
-  // Lean into the corner: the arc turned this frame, scaled by how fast
-  // he is moving, feeds the rig's bank (clamped, then damped inside
-  // stick3d). Walking straight banks nothing; cutting a corner at speed
-  // tips the shoulders a few degrees into the line and settles back.
-  const prevAngle = ent.figAngle ?? ent.angle;
-  const arc = angleArc(prevAngle, ent.angle);
+  // Lean into the corner: the arc turned this frame, scaled by pace,
+  // feeds the rig's bank (clamped here, damped inside stick3d). Walking
+  // straight banks nothing; cutting a corner at speed tips the
+  // shoulders into the line and settles back.
+  const arc = turnArc(ent.figAngle ?? ent.angle, ent.angle);
   ent.figAngle = ent.angle;
-  const rate = dt > 0 ? arc / dt : 0;
   const pace = Math.min(1, (ent.speedNow ?? 0) / 170);
-  ent.fig.target.bank = Math.max(-0.85, Math.min(0.85, rate * 0.05)) * pace;
+  ent.fig.target.bank = Math.max(-0.85, Math.min(0.85, (dt > 0 ? arc / dt : 0) * 0.05)) * pace;
   // A gunman in the fight holds the pistol up on the player — the rig's
-  // aim pose on the gun arm, which the ped's facing (set by the fight
-  // state) points at him. Posted, walking or down, the arm hangs and
-  // the pistol rides at his side. Only armed peds are touched: the
-  // player's own aim is combat.js's business.
+  // aim pose on the gun arm, pointed by the ped's facing. Posted,
+  // walking or down, the arm hangs and the pistol rides at his side.
+  // Only armed peds are touched: the player's aim is combat.js's work.
   if (ent.armed) ent.fig.target.aim = ent.state === 'fight' ? 1 : 0;
   ent.fig.update(dt, time);
 }
 
 /**
- * Seat the player's figure in their car: on the driver's side, sunk onto the seat,
- * hands on the wheel (the drive pose), shadow off. Used every frame while driving.
+ * Seat the player's figure in their car: driver's side, sunk onto the
+ * seat, hands on the wheel (the drive pose), shadow off. Every frame
+ * while driving.
  */
 export function seatDriverFigure(g, dt, time) {
   const p = g.player;
@@ -273,8 +277,8 @@ export function seatDriverFigure(g, dt, time) {
   p.fig.target.drive = 1;
   p.fig.target.speed = 0;
   // A seated driver does not bank, crouch, aim or reach for a door: the
-  // walk-cycle and climb targets must be cleared, or the arm stays up
-  // from a punch fired while running for the door.
+  // walk-cycle and climb targets must be cleared, or an arm stays up
+  // from a punch thrown while running for the door.
   p.fig.target.bank = 0;
   p.fig.target.crouch = 0;
   p.fig.target.reach = 0;
@@ -283,33 +287,23 @@ export function seatDriverFigure(g, dt, time) {
   p.fig.update(dt, time);
 }
 
-/** Shortest signed arc from angle a to angle b, in (-PI, PI]. */
-function angleArc(a, b) {
-  let d = (b - a) % (Math.PI * 2);
-  if (d > Math.PI) d -= Math.PI * 2;
-  if (d < -Math.PI) d += Math.PI * 2;
-  return d;
-}
-
 /**
  * The player's legs: WASD/arrows or the touch stick, Shift to sprint,
- * building collisions. Movement is CAMERA-RELATIVE (GTA-style): the input
- * axes are screen-space intent (x = screen right, y = screen down), rotated
- * by the yaw the camera renders with this frame — g.cam.yaw plus the
- * look-back flip — which main.js settles in its camera-control step before
- * this runs. Screen-right in world terms is (sin yaw, -cos yaw) and
- * screen-down is (cos yaw, sin yaw); combining the two gives the world
- * move vector below, so "up" always runs away from the camera the player
- * is actually looking through, however it has orbited or is still easing
- * into its auto-align.
+ * building collisions. Movement is CAMERA-RELATIVE (GTA-style): the
+ * input axes are screen-space intent (x = screen right, y = screen
+ * down), rotated by the yaw the camera renders with this frame —
+ * g.cam.yaw plus the look-back flip — which main.js settles in its
+ * camera step before this runs. Screen-right in world terms is
+ * (sin yaw, -cos yaw) and screen-down is (cos yaw, sin yaw), so "up"
+ * always runs away from the camera the player is actually looking
+ * through, however it has orbited or is still easing into auto-align.
  */
 export function updatePlayerOnFoot(g, dt) {
   const p = g.player;
-  // Post-hit state (vehicles.js updatePlayerCarHits sets these when a
-  // moving car connects): a second of invulnerability, and the brief
-  // down/stagger of the hit itself. While down there is no input
-  // control — the knockback slide carries him clear while the rig's
-  // down pose plays, then he is back on his feet.
+  // Post-hit state (vehicles.js sets these when a moving car connects):
+  // a second of invulnerability and the brief stagger of the hit itself.
+  // While down there is no input control — the knockback slide carries
+  // him clear while the rig's down pose plays, then he is back up.
   p.hurtT = Math.max(0, (p.hurtT ?? 0) - dt);
   if ((p.downT ?? 0) > 0) {
     p.downT -= dt;
@@ -325,6 +319,7 @@ export function updatePlayerOnFoot(g, dt) {
     return;
   }
   p.fig.target.down = 0;
+
   const axes = g.input.axes();
   const sprint = g.input.down('ShiftLeft', 'ShiftRight');
   const speed = sprint ? PLAYER.sprintSpeed : PLAYER.walkSpeed;
@@ -334,6 +329,7 @@ export function updatePlayerOnFoot(g, dt) {
   let mx = axes.x * sin + axes.y * cos;
   let my = -axes.x * cos + axes.y * sin;
   const len = Math.hypot(mx, my);
+
   // --- Dash: a Space tap (the touch DASH button writes the same code)
   // bursts in the input direction — or straight ahead with no input —
   // at well over sprint speed for a quarter of a second, on a short
@@ -357,32 +353,34 @@ export function updatePlayerOnFoot(g, dt) {
     p.x += p.dashDirX * PLAYER.dashSpeed * dt;
     p.y += p.dashDirY * PLAYER.dashSpeed * dt;
     p.moveAngle = Math.atan2(p.dashDirY, p.dashDirX);
-    p.angle += angleArc(p.angle, p.moveAngle) * (1 - Math.exp(-18 * dt));
+    p.angle += turnArc(p.angle, p.moveAngle) * (1 - Math.exp(-18 * dt));
     p.speedNow = PLAYER.dashSpeed;
   } else if (len > 0) {
-    // Analog stick magnitude scales the pace (a light push walks slowly);
-    // keyboard axes are always full-length, so this is 1 there as before.
+    // Analog magnitude scales the pace (a light push walks slowly);
+    // keyboard axes are always full-length, so this is 1 there.
     const mag = Math.min(1, len);
     mx /= len;
     my /= len;
     p.x += mx * speed * mag * dt;
     p.y += my * speed * mag * dt;
-    // The direction actually travelled this frame: the camera's auto-align
-    // keys off this, never off the eased facing below.
+    // The direction actually travelled this frame: the camera's
+    // auto-align keys off this, never off the eased facing below.
     p.moveAngle = Math.atan2(my, mx);
-    // Facing eases toward the travel direction; it never steers movement.
-    p.angle += angleArc(p.angle, p.moveAngle) * (1 - Math.exp(-14 * dt));
+    // Facing eases toward the travel direction; it never steers.
+    p.angle += turnArc(p.angle, p.moveAngle) * (1 - Math.exp(-14 * dt));
     p.speedNow = speed * mag;
   } else {
     p.speedNow = 0;
   }
   resolveCircleCollision(g.city, p, PLAYER.radius);
   clampToWorld(p, 16);
+
   // Do not share a spot with a pedestrian: nudge them politely aside.
-  // Essential men are never nudged: the shove has no building resolution
-  // behind it, so leaning on Bruno used to walk him into the diner wall,
-  // where he stood inside the geometry, invisible, while his talk prompt
-  // kept firing. Shade waits for a car at his post, not for a shove.
+  // Essential men are never nudged — the shove has no building
+  // resolution behind it, so leaning on Bruno used to walk him into the
+  // diner wall, where he stood inside the geometry, invisible, while
+  // his talk prompt kept firing. Shade waits for a car at his post, not
+  // for a shove. Everyone else gets the wall guarantee directly, below.
   for (const ped of g.peds) {
     if (ped.state === 'down' || ped.state === 'inCar' || isEssential(ped)) continue;
     const dx = ped.x - p.x;
@@ -392,10 +390,6 @@ export function updatePlayerOnFoot(g, dt) {
       const d = Math.sqrt(d2);
       ped.x += (dx / d) * 26 * dt;
       ped.y += (dy / d) * 26 * dt;
-      // The shove itself must respect walls: leaning on a man who is
-      // standing against a facade used to press him into it until his
-      // own state's next resolution (Bruno is excluded above for the
-      // same reason; now everyone gets the guarantee directly).
       resolvePedCollision(g, ped);
     }
   }
@@ -405,24 +399,21 @@ export function updatePlayerOnFoot(g, dt) {
  * Pedestrian building collision (round #24). A person is an 11-unit
  * circle and must never end a frame inside a building — but the
  * sidewalk graph alone cannot promise that: its lines run at road
- * centre +/- 71, and the procedural block fill starts buildings 16
- * units inside the block edge (road half-width 55), so for two of the
- * three fill styles the building face lies EXACTLY on the line, and a
- * few landmark footprints span the line outright. walkSidewalk pins a
+ * centre +/- 71, and the procedural block fill starts buildings 16 units
+ * inside the block edge (road half-width 55), so for two of the three
+ * fill styles the building face lies EXACTLY on the line, and a few
+ * landmark footprints span the line outright. walkSidewalk pins a
  * walker to his line every frame, so without resolution he strolled
  * with his body in the wall along whole block faces (the user's
  * "pedestrians pass through walls"). Cars resolve against the whole
- * city (resolveCircleCollision); a crowd cannot afford that per head
- * per frame, so peds resolve against a static grid index of the city:
- * each cell lists only the buildings and trees whose expanded
- * footprints reach into it — every building a person standing in the
- * cell could possibly touch. The push-out math is
- * resolveCircleCollision's own, run on the cell shim, so a ped slides
- * along a face exactly the way a car does, and a centre that somehow
- * lands inside a footprint leaves by its nearest face.
+ * city; a crowd cannot afford that per head per frame, so peds resolve
+ * against a static grid index of the city: each cell lists only the
+ * buildings and trees whose expanded footprints reach into it. The
+ * push-out math is resolveCircleCollision's own, run on the cell shim,
+ * so a ped slides along a face exactly the way a car does.
  */
 const PED_CELL = 128;
-const PED_CELL_PAD = 16; // >= the ped radius: a cell lists everything that can touch it
+const PED_CELL_PAD = 16; // >= the ped radius: a cell lists all that can touch it
 let pedGridFor = null;
 let pedGrid = null;
 
@@ -445,7 +436,7 @@ function buildPedGrid(city) {
     }
   }
   for (const t of city.trees) {
-    // Tree collision reaches 18 from the centre (resolveCircleCollision).
+    // Tree collision reaches 18 from the centre.
     const [cx0, cx1] = span(t.x - 20, t.x + 20);
     const [cy0, cy1] = span(t.y - 20, t.y + 20);
     for (let cx = cx0; cx <= cx1; cx += 1) {
@@ -500,24 +491,24 @@ function walkSidewalk(g, ped, dt, speed) {
     }
   }
   // Pin to the line — through the detour offset the resolver last
-  // imposed (see below), not the bare line: where a face sits on the
-  // line, the working path is one radius off it, and re-pinning to the
-  // bare line inside the gap between two buildings would seat him
-  // between their corners, where both exits are head-on (the alley
-  // trap measured in ped-clip-probe's first run).
+  // imposed, not the bare line: where a face sits on the line, the
+  // working path is one radius off it, and re-pinning to the bare line
+  // inside the gap between two buildings would seat him between their
+  // corners, where both exits are head-on (the alley trap measured in
+  // ped-clip-probe's first run).
   const off = ped.lineOff ?? 0;
   if (ped.axis === 'y') ped.x = ped.line + off;
   else ped.y = ped.line + off;
   if (ped.x < 30 || ped.x > WORLD.width - 30 || ped.y < 30 || ped.y > WORLD.height - 30) ped.dir *= -1;
   // The line is a guide, not a promise of clearance: where a building
-  // face lies on (or across) the line, the walker steps out to the
-  // face and strolls the gutter line instead of the wall (round #24).
+  // face lies on (or across) the line, the walker steps out to the face
+  // and strolls the gutter line instead of the wall (round #24).
   resolvePedCollision(g, ped);
   // Keep the resolver's word over the pin's: if the push-out moved him
   // across his axis, that offset becomes his working line (lineOff)
   // until the bare line is clear again, where it decays home. A purely
-  // along-axis push (head-on into a face) leaves the offset alone —
-  // the blocked rule below handles that case.
+  // along-axis push (head-on into a face) leaves the offset alone — the
+  // blocked rule below handles that case.
   const crossNow = ped.axis === 'y' ? ped.x : ped.y;
   if (Math.abs(crossNow - (ped.line + off)) > 0.01) {
     ped.lineOff = crossNow - ped.line;
@@ -531,9 +522,9 @@ function walkSidewalk(g, ped, dt, speed) {
   // his step outright, every frame, and the pin leaves him no lateral
   // room to slide around the corner. If his along-axis progress stays
   // cancelled for a quarter of a second he treats the way as blocked
-  // and turns back the way he came — a citizen detour, never a freeze.
-  // (A corner he could round resolves within a frame or two, well
-  // under the threshold, so rounding never triggers this.)
+  // and turns back — a citizen detour, never a freeze. (A corner he
+  // could round resolves within a frame or two, well under the
+  // threshold, so rounding never triggers this.)
   const stepLen = speed * dt;
   const progressed = ped.axis === startAxis
     ? Math.abs((ped.axis === 'y' ? ped.y : ped.x) - startPos)
@@ -550,8 +541,8 @@ function walkSidewalk(g, ped, dt, speed) {
   ped.speedNow = speed;
 }
 
-/** Move a person straight toward a point at a speed; returns the distance left. */
-function moveToward(g, ped, tx, ty, dt, speed) {
+/** Move a person straight toward a point; returns the distance it started at. */
+function strideToward(g, ped, tx, ty, dt, speed) {
   const dx = tx - ped.x;
   const dy = ty - ped.y;
   const d = Math.hypot(dx, dy);
@@ -567,9 +558,67 @@ function moveToward(g, ped, tx, ty, dt, speed) {
   return d;
 }
 
+/**
+ * The fighter's dive-dodge (rivals and officers only). A car bearing
+ * down — real speed, the fighter inside a window ahead of it and near
+ * its line — triggers a quick lateral burst, read by the rig as a
+ * crouched dive, on a per-fighter cooldown of just over a second: strong
+ * but not absolute. Corner him, catch him mid-recovery or mid-cooldown,
+ * or while his attention is on the fight, and the car connects. Ordinary
+ * pedestrians get none of this. Returns true when the dive consumed the
+ * ped's whole frame (figure already synced).
+ */
+function diveDodge(g, ped, dt, time) {
+  ped.dodgeCd = Math.max(0, (ped.dodgeCd ?? 0) - dt);
+  if (!((ped.dodgeT ?? 0) > 0) && ped.dodgeCd <= 0
+    && ped.state !== 'down' && ped.state !== 'inCar' && ped.state !== 'board') {
+    for (const car of g.cars) {
+      if (car.occupant === ped) continue;
+      const cs = Math.abs(car.speed);
+      if (cs < 110) continue;
+      const fx = Math.cos(car.angle) * Math.sign(car.speed);
+      const fy = Math.sin(car.angle) * Math.sign(car.speed);
+      const rx = ped.x - car.x;
+      const ry = ped.y - car.y;
+      const ahead = rx * fx + ry * fy;
+      if (ahead < 8 || ahead > 165) continue;
+      const lat = ry * fx - rx * fy;
+      if (Math.abs(lat) > 46) continue;
+      // Dive perpendicular, to the side he is already on; a dead-centre
+      // approach dives to his right.
+      const side = lat < 0 ? -1 : 1;
+      ped.dodgeX = -fy * side * 560;
+      ped.dodgeY = fx * side * 560;
+      ped.dodgeT = 0.34;
+      ped.dodgeCd = 1.15;
+      ped.angle = Math.atan2(ped.dodgeY, ped.dodgeX);
+      break;
+    }
+  }
+  if ((ped.dodgeT ?? 0) > 0) {
+    ped.dodgeT -= dt;
+    ped.x += (ped.dodgeX ?? 0) * dt;
+    ped.y += (ped.dodgeY ?? 0) * dt;
+    const diveDecay = Math.max(0, 1 - 7 * dt);
+    ped.dodgeX = (ped.dodgeX ?? 0) * diveDecay;
+    ped.dodgeY = (ped.dodgeY ?? 0) * diveDecay;
+    ped.speedNow = Math.hypot(ped.dodgeX ?? 0, ped.dodgeY ?? 0);
+    ped.fig.target.crouch = 1;
+    resolvePedCollision(g, ped);
+    clampToWorld(ped, 16);
+    syncFigure(ped, dt, time);
+    return true;
+  }
+  ped.fig.target.crouch = 0;
+  return false;
+}
+
 /** Every person's brain for one frame. */
 export function updatePeds(g, dt, time) {
   const p = g.player;
+  // The copy matters: states below remove peds mid-loop (corpses swept,
+  // officers boarding or giving up), and a live-array walk would skip
+  // the next person on every removal — and shift the shared RNG order.
   for (const ped of [...g.peds]) {
     if (ped.exprT > 0) {
       ped.exprT -= dt;
@@ -580,56 +629,8 @@ export function updatePeds(g, dt, time) {
       ped.label.visible = ped.state !== 'inCar'
         && Math.hypot(ped.x - p.x, ped.y - p.y) < 320;
     }
-    // Fighter dive-dodge: collectors and officers on foot dive out of a
-    // car's path. A car bearing down on them (real speed, the fighter
-    // inside a window ahead of it and near its line) triggers a quick
-    // lateral burst — the rig reads it as a crouched dive — with a
-    // per-fighter cooldown of just over a second, so the dodge is
-    // strong but not absolute: corner him, catch him mid-recovery or
-    // mid-cooldown, or while his attention is on the fight, and the
-    // car connects. Ordinary pedestrians get none of this.
-    if (ped.role === 'rival' || ped.role === 'cop') {
-      ped.dodgeCd = Math.max(0, (ped.dodgeCd ?? 0) - dt);
-      if (!((ped.dodgeT ?? 0) > 0) && ped.dodgeCd <= 0
-        && ped.state !== 'down' && ped.state !== 'inCar' && ped.state !== 'board') {
-        for (const car of g.cars) {
-          if (car.occupant === ped) continue;
-          const cs = Math.abs(car.speed);
-          if (cs < 110) continue;
-          const fx = Math.cos(car.angle) * Math.sign(car.speed);
-          const fy = Math.sin(car.angle) * Math.sign(car.speed);
-          const rx = ped.x - car.x;
-          const ry = ped.y - car.y;
-          const ahead = rx * fx + ry * fy;
-          if (ahead < 8 || ahead > 165) continue;
-          const lat = ry * fx - rx * fy;
-          if (Math.abs(lat) > 46) continue;
-          // Dive perpendicular, to the side he is already on; a
-          // dead-centre approach dives to his right.
-          const side = lat < 0 ? -1 : 1;
-          ped.dodgeX = -fy * side * 560;
-          ped.dodgeY = fx * side * 560;
-          ped.dodgeT = 0.34;
-          ped.dodgeCd = 1.15;
-          ped.angle = Math.atan2(ped.dodgeY, ped.dodgeX);
-          break;
-        }
-      }
-      if ((ped.dodgeT ?? 0) > 0) {
-        ped.dodgeT -= dt;
-        ped.x += (ped.dodgeX ?? 0) * dt;
-        ped.y += (ped.dodgeY ?? 0) * dt;
-        const diveDecay = Math.max(0, 1 - 7 * dt);
-        ped.dodgeX = (ped.dodgeX ?? 0) * diveDecay;
-        ped.dodgeY = (ped.dodgeY ?? 0) * diveDecay;
-        ped.speedNow = Math.hypot(ped.dodgeX ?? 0, ped.dodgeY ?? 0);
-        ped.fig.target.crouch = 1;
-        resolvePedCollision(g, ped);
-        clampToWorld(ped, 16);
-        syncFigure(ped, dt, time);
-        continue;
-      }
-      ped.fig.target.crouch = 0;
+    if ((ped.role === 'rival' || ped.role === 'cop') && diveDodge(g, ped, dt, time)) {
+      continue;
     }
     switch (ped.state) {
       case 'down': {
@@ -637,6 +638,8 @@ export function updatePeds(g, dt, time) {
         ped.speedNow = 0;
         ped.fig.target.down = 1;
         if (ped.hp > 0 && ped.downT > 2.6) {
+          // Beaten but alive: back up — a citizen runs, a fighter
+          // returns to the fight.
           ped.state = ped.role === 'ped' ? 'flee' : 'fight';
           ped.scaredT = 2;
           ped.fig.target.down = 0;
@@ -648,14 +651,16 @@ export function updatePeds(g, dt, time) {
       }
       case 'inCar':
         continue;
-      case 'idle': // Bruno (and Shade): stands, sways, watches the street.
+      case 'idle': { // Bruno (and Shade): stands, sways, watches the street.
         ped.speedNow = 0;
         ped.angle = Math.PI / 2 + Math.sin(time * 0.4) * 0.25;
         if (isEssential(ped) && ped.homeX !== undefined) {
           // Post-keeping: if anything ever displaces an essential man
           // (a shove, a spawn overlap), he walks back to his post, so
           // the man the prompt and the marker name is always standing
-          // where they point.
+          // where they point. The walk home is a straight line; if a
+          // shove ever left him on the far side of the diner wall, he
+          // slides along its face instead of strolling through it.
           const dx = ped.homeX - ped.x;
           const dy = ped.homeY - ped.y;
           const d = Math.hypot(dx, dy);
@@ -663,21 +668,19 @@ export function updatePeds(g, dt, time) {
             const step = Math.min(d, 92 * dt);
             ped.x += (dx / d) * step;
             ped.y += (dy / d) * step;
-            // The walk home is a straight line; if a shove ever left
-            // him on the far side of the diner wall, he slides along
-            // its face to his post instead of strolling through it.
             resolvePedCollision(g, ped);
             ped.speedNow = 60;
           }
         }
         break;
+      }
       case 'board': { // Shade runs for the player's car and climbs in.
         const car = p.car ?? g.nearestCar;
         if (!car) {
           ped.state = 'fight';
           break;
         }
-        const d = moveToward(g, ped, car.x, car.y, dt, 250);
+        const d = strideToward(g, ped, car.x, car.y, dt, 250);
         if (d < 30) {
           ped.state = 'inCar';
           ped.fig.group.visible = false;
@@ -689,24 +692,24 @@ export function updatePeds(g, dt, time) {
       case 'flee': {
         ped.scaredT -= dt;
         const threat = g.threat ?? p;
-        const d = moveToward(g, ped, ped.x * 2 - threat.x, ped.y * 2 - threat.y, dt, 235);
-        void d;
+        strideToward(g, ped, ped.x * 2 - threat.x, ped.y * 2 - threat.y, dt, 235);
         if (ped.scaredT <= 0) ped.state = 'walk';
         break;
       }
       case 'fight': {
-        // Hostiles chase the player; on foot they punch him, in a car they beat the car.
+        // Hostiles chase the player; on foot they punch him, in a car
+        // they beat the car.
         const target = p.state === 'car' && p.car ? p.car : p;
         const d = Math.hypot(target.x - ped.x, target.y - ped.y);
         // Officers stand down once the heat is gone. A far officer is
         // already out of the story — the cooling clear can only happen
         // with every unit >380 away — and simply leaves the world. A
         // NEAR officer walks back to his cruiser in the 'leave' state:
-        // the instant clears (Spray 'n Go paint, the fixer) can zero
-        // the heat with him at the player's elbow. (He used to be
-        // switched to 'idle' here — Bruno's stand-at-post state, which
-        // nothing ever leaves or despawns — so he froze upright
-        // forever while his car drove off without him.)
+        // the instant clears (paint, the fixer) can zero the heat with
+        // him at the player's elbow. (He used to be switched to 'idle'
+        // here — Bruno's stand-at-post state, which nothing ever
+        // leaves or despawns — so he froze upright forever while his
+        // car drove off without him. 'idle' is never an officer state.)
         if (ped.role === 'cop' && g.stars === 0) {
           if (d > 150) {
             removePed(g, ped);
@@ -717,7 +720,7 @@ export function updatePeds(g, dt, time) {
           break;
         }
         if (d > (p.state === 'car' ? 40 : 30)) {
-          moveToward(g, ped, target.x, target.y, dt, ped.chase ?? (ped.role === 'cop' ? 196 : 178));
+          strideToward(g, ped, target.x, target.y, dt, ped.chase ?? (ped.role === 'cop' ? 196 : 178));
         } else {
           ped.speedNow = 0;
           ped.angle = Math.atan2(target.y - ped.y, target.x - ped.x);
@@ -754,13 +757,13 @@ export function updatePeds(g, dt, time) {
         const rideOk = !!car && g.cars.includes(car) && car.kind === 'police'
           && !car.wrecked && car.occupant !== 'player';
         if (rideOk && Math.hypot(car.x - ped.x, car.y - ped.y) <= 700) {
-          const d = moveToward(g, ped, car.x, car.y, dt, 172);
+          const d = strideToward(g, ped, car.x, car.y, dt, 172);
           if (d <= 38) {
             removePed(g, ped); // climbed in; removePed frees the car
             continue;
           }
         } else {
-          moveToward(g, ped, ped.x * 2 - p.x, ped.y * 2 - p.y, dt, 150);
+          strideToward(g, ped, ped.x * 2 - p.x, ped.y * 2 - p.y, dt, 150);
           if (Math.hypot(p.x - ped.x, p.y - ped.y) > 560) {
             removePed(g, ped);
             continue;

@@ -1,26 +1,38 @@
-// The clock over Palmera. One day runs in DAY_SECONDS of real play time and
-// walks through night, dawn, day, golden hour and dusk. solve(hour) answers the
-// values the renderer copies every frame: sky, horizon and haze tones, key and
-// ambient light strength, tone-map exposure, window and neon glow, star opacity,
-// and where the sun stands.
+// Palmera's day/night clock. A full day takes DAY_SECONDS of play; solve(hour)
+// turns an hour into everything the renderer needs for that moment — sky and
+// haze colours, light levels, glow strengths, exposure, and the sun's
+// direction. The cycle is a ring of keyframes: solve finds the pair of stops
+// bracketing the hour and blends between them.
 //
-// Stills pin the hour: ?shot= uses SHOT_HOUR and the title uses noon. main.js
-// saves the raw seconds in `clock` on the save; an older save has no such field
-// and opens at noon, which is exactly what the game did before this update.
+// Two callers pin the hour instead of advancing it: the ?shot= stills use the
+// golden-hour constant from main.js, and the title screen sits at noon. The
+// save stores raw clock seconds; a save from before the clock existed has no
+// such field and starts at noon, as the game always used to.
 import * as THREE from 'three';
 import { DAY_SECONDS } from './config.js';
 
-const h24 = (h) => ((h % 24) + 24) % 24;
-const lerp = (a, b, k) => a + (b - a) * k;
-const clamp01 = (v) => Math.max(0, Math.min(1, v));
+/** Wrap any hour value into [0, 24). */
+function wrapHour(h) {
+  return ((h % 24) + 24) % 24;
+}
 
-/**
- * Key stops. Columns: hour, sky, horizon, fog, key, key strength, hemi sky,
- * hemi ground, hemi strength, water, lamp pool, window glow, neon glow, stars,
- * exposure, shadow. Colours are hex; strengths are plain numbers. The day is
- * closed at 24 so 23:59 and 00:00 read the same.
- */
-const STOPS = [
+/** Straight blend: mix(a, b, 0) is a, mix(a, b, 1) is b. */
+function mix(a, b, k) {
+  return a + (b - a) * k;
+}
+
+/** Clamp into [0, 1]. */
+function unit(v) {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+// The keyframe ring. Every row is one stop of the day:
+//   [hour, sky, horizon, fog, keyColour, keyLevel, hemiSky, hemiGround,
+//    hemiLevel, water, lampColour, windowGlow, neonGlow, starGlow,
+//    exposure, shadow]
+// Colours are hex, levels are plain numbers. The ring closes at 24 with the
+// same values as 0, so the blend across midnight is seamless.
+const KEYFRAMES = [
   [0.0, 0x0b1230, 0x243058, 0x1a2340, 0xa8bdff, 0.52, 0x3a4c7c, 0x232a3a, 0.95, 0x1d3d5e, 0xffd98b, 1.35, 1.00, 0.90, 1.22, 0.62],
   [4.8, 0x0d1433, 0x4f3455, 0x232a42, 0xb0c2ff, 0.62, 0x40527c, 0x24242c, 1.00, 0x1d3a58, 0xffe0a0, 1.20, 0.95, 0.70, 1.18, 0.66],
   [5.7, 0x314a78, 0xe5a06f, 0xb98167, 0xffc08a, 1.00, 0x9db2c9, 0x6b5a4a, 0.85, 0x5b7186, 0xffcf90, 0.90, 0.45, 0.18, 1.06, 0.80],
@@ -35,61 +47,88 @@ const STOPS = [
   [24.0, 0x0b1230, 0x243058, 0x1a2340, 0xa8bdff, 0.52, 0x3a4c7c, 0x232a3a, 0.95, 0x1d3d5e, 0xffd98b, 1.35, 1.00, 0.90, 1.22, 0.62],
 ];
 
-/** The environment at `hour` (0..24). */
-export function solve(hour) {
-  const h = h24(hour);
+// Which env fields each column feeds. Colour columns blend in THREE.Color
+// space; level columns blend as plain numbers.
+const COLOUR_COLUMNS = [
+  ['sky', 1], ['horizon', 2], ['fog', 3], ['key', 4],
+  ['hemiSky', 6], ['hemiGround', 7], ['water', 9], ['beam', 10],
+];
+const LEVEL_COLUMNS = [
+  ['keyI', 5], ['hemiI', 8], ['windowGlow', 11], ['neonGlow', 12],
+  ['stars', 13], ['exposure', 14], ['shadow', 15],
+];
+
+/** Index of the keyframe the blend for hour h starts from. */
+function segmentStart(h) {
   let i = 0;
-  while (i < STOPS.length - 2 && STOPS[i + 1][0] <= h) i += 1;
-  const a = STOPS[i];
-  const b = STOPS[i + 1];
-  const k = b[0] > a[0] ? (h - a[0]) / (b[0] - a[0]) : 0;
-  const col = (n) => new THREE.Color(a[n]).lerp(new THREE.Color(b[n]), k);
-  const num = (n) => lerp(a[n], b[n], k);
+  while (i < KEYFRAMES.length - 2 && KEYFRAMES[i + 1][0] <= h) i += 1;
+  return i;
+}
+
+/** The environment at `hour` (any real number; wrapped into the day). */
+export function solve(hour) {
+  const h = wrapHour(hour);
+  const from = KEYFRAMES[segmentStart(h)];
+  const to = KEYFRAMES[segmentStart(h) + 1];
+  const k = to[0] > from[0] ? (h - from[0]) / (to[0] - from[0]) : 0;
+
+  const blended = {};
+  for (const [field, col] of COLOUR_COLUMNS) {
+    blended[field] = new THREE.Color(from[col]).lerp(new THREE.Color(to[col]), k);
+  }
+  for (const [field, col] of LEVEL_COLUMNS) {
+    blended[field] = mix(from[col], to[col], k);
+  }
+
   const sunUp = h > 6.15 && h < 18.95;
   const env = {
     hour: h,
-    sky: col(1),
-    horizon: col(2),
-    fog: col(3),
-    key: col(4),
-    keyI: num(5),
-    hemiSky: col(6),
-    hemiGround: col(7),
-    hemiI: num(8),
-    water: col(9),
-    beam: col(10),
-    windowGlow: num(11),
-    neonGlow: num(12),
-    stars: num(13),
-    exposure: num(14),
-    shadow: num(15),
+    sky: blended.sky,
+    horizon: blended.horizon,
+    fog: blended.fog,
+    key: blended.key,
+    keyI: blended.keyI,
+    hemiSky: blended.hemiSky,
+    hemiGround: blended.hemiGround,
+    hemiI: blended.hemiI,
+    water: blended.water,
+    beam: blended.beam,
+    windowGlow: blended.windowGlow,
+    neonGlow: blended.neonGlow,
+    stars: blended.stars,
+    exposure: blended.exposure,
+    shadow: blended.shadow,
     sunUp,
     night: !sunUp,
     darkness: 0,
   };
-  // Darkness 0 by day, 1 in the deep night: lamp glow, lit windows and the sea
-  // sparkle all scale by it.
+
+  // Darkness ramps from 0 in daylight to 1 in the deep of night; lamp glow,
+  // lit windows and the sea sparkle all scale by it. The ramp is measured
+  // from the nearer of the two sun gates (up 06:15, down 18:55).
   if (!sunUp) {
-    const edge = h < 12 ? 6.15 - h : h - 18.95;
-    env.darkness = clamp01((edge + 1.2) / 2.6);
+    const pastGate = h < 12 ? 6.15 - h : h - 18.95;
+    env.darkness = unit((pastGate + 1.2) / 2.6);
   }
-  // Sun arc: up at 06:15, high at 12:30, down at 18:55. Azimuth runs east to
-  // west; the still camera is east, so the long shadows fall across frame.
-  const dayT = clamp01((h - 5.4) / 13.6);
-  const elev = 0.11 + Math.sin(dayT * Math.PI) * 0.95;
-  const azim = -2.35 + dayT * 3.40;
+
+  // The sun's arc: rises 06:15, peaks at 12:30, sets 18:55, travelling east
+  // to west. The still camera looks east, so shadows rake across the frame.
+  // At night the same vector is flipped and lifted — a moon stand-in.
+  const dayT = unit((h - 5.4) / 13.6);
+  const elevation = 0.11 + Math.sin(dayT * Math.PI) * 0.95;
+  const azimuth = -2.35 + dayT * 3.40;
   const dir = new THREE.Vector3(
-    Math.cos(azim) * Math.cos(elev),
-    Math.sin(elev),
-    Math.sin(azim) * Math.cos(elev),
+    Math.cos(azimuth) * Math.cos(elevation),
+    Math.sin(elevation),
+    Math.sin(azimuth) * Math.cos(elevation),
   ).normalize();
   if (!sunUp) dir.set(-dir.x * 0.42, 0.58, -dir.z * 0.42).normalize();
   env.dir = dir;
   return env;
 }
 
-/** Seconds into the day for an hour. */
-export const clockAt = (hour) => (h24(hour) / 24) * DAY_SECONDS;
+/** Clock seconds corresponding to an hour of the day. */
+export const clockAt = (hour) => (wrapHour(hour) / 24) * DAY_SECONDS;
 
-/** Hour for a day position, wrapped. */
-export const hourOf = (seconds) => h24((seconds / DAY_SECONDS) * 24);
+/** The hour a clock position falls in, wrapped into [0, 24). */
+export const hourOf = (seconds) => wrapHour((seconds / DAY_SECONDS) * 24);
