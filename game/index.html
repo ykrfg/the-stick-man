@@ -72,6 +72,25 @@
     background: rgba(24,12,14,0.72); color: #ff9a86; font: 700 13px system-ui, sans-serif;
     white-space: nowrap; cursor: pointer; touch-action: none; -webkit-user-select: none; user-select: none; }
   #btnReset.armed { background: #c93a2c; border-color: #17181c; color: #ffffff; }
+  /* CREDITS (title / pause; visibility mirrors #btnHowto via the inline
+     script at the end of <body>): third-party licence attributions must
+     be readable inside the game itself, not only in the repo. */
+  #btnCredits { position: fixed; right: 14px; top: calc(58px + env(safe-area-inset-top)); z-index: 9; display: none;
+    padding: 9px 18px; border-radius: 999px; border: 2px solid rgba(255,255,255,0.55);
+    background: rgba(10,14,24,0.55); color: #ffd94d; font: 800 13px system-ui, sans-serif;
+    white-space: nowrap; cursor: pointer; touch-action: none; -webkit-user-select: none; user-select: none; }
+  #creditsSheet { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center;
+    background: rgba(6,8,14,0.72); }
+  #creditsSheet.open { display: flex; }
+  #creditsPanel { max-width: min(560px, 92vw); max-height: 84vh; overflow-y: auto; border-radius: 16px;
+    border: 2px solid rgba(255,255,255,0.35); background: #101623; color: #e8edf5;
+    padding: 22px 26px; font: 400 14px/1.65 system-ui, sans-serif; }
+  #creditsPanel h2 { margin: 0 0 10px; font-size: 19px; color: #ffd94d; }
+  #creditsPanel h3 { margin: 16px 0 4px; font-size: 14px; color: #ffd94d; }
+  #creditsPanel p { margin: 4px 0; }
+  #creditsPanel a { color: #8ecfff; }
+  #btnCreditsClose { margin-top: 18px; padding: 9px 22px; border-radius: 999px; border: 2px solid #17181c;
+    background: #ffd94d; color: #17181c; font: 800 14px system-ui, sans-serif; cursor: pointer; }
   /* JP/EN language toggle: title and pause screens only (main.js owns its
      visibility). Top-center, clear of the wanted stars (top-right) and the
      money readout (top-left) on both platforms. */
@@ -104,6 +123,21 @@
   <button id="tapBtn" type="button">TAP TO START</button>
 </div>
 <button id="btnHowto" type="button">HOW TO PLAY</button>
+<button id="btnCredits" type="button">CREDITS</button>
+<div id="creditsSheet" role="dialog" aria-label="Credits and licences">
+  <div id="creditsPanel">
+    <h2>THE STICK MAN — Credits / ライセンス表記</h2>
+    <h3>3D Rendering / 描画</h3>
+    <p>Three.js — Copyright © Three.js Authors, MIT License.<br><a href="https://threejs.org">threejs.org</a></p>
+    <h3>Sound Effects / 効果音</h3>
+    <p>BigSoundBank — sounds recorded by Joseph Sardin, released under CC0 (public domain).<br><a href="https://bigsoundbank.com">bigsoundbank.com</a></p>
+    <p>Car crash sound — DailySounds.org, free-use licence (use inside games allowed).<br><a href="https://dailysounds.org">dailysounds.org</a></p>
+    <h3>Music / 音楽</h3>
+    <p>Background music generated with Suno.</p>
+    <p>Full per-file audio provenance is kept in <i>game/audio/SOURCES.md</i> in the source repository.</p>
+    <button id="btnCreditsClose" type="button">CLOSE / 閉じる</button>
+  </div>
+</div>
 <button id="btnCustomize" type="button">CUSTOMIZE</button>
 <button id="btnReset" type="button">RESET PROGRESS</button>
 <div id="langToggle" role="group" aria-label="Language / 言語">
@@ -111,6 +145,25 @@
   <button id="langEn" type="button">EN</button>
 </div>
 <p id="status" role="status" aria-live="polite"></p>
+<script>
+  // CREDITS button: shown exactly when the HOW TO PLAY button is (title /
+  // pause screens — main.js owns that button's display). Self-contained so
+  // no game module needs to know about it.
+  (function () {
+    var btn = document.getElementById('btnCredits');
+    var howto = document.getElementById('btnHowto');
+    var sheet = document.getElementById('creditsSheet');
+    function sync() {
+      btn.style.display = (howto.style.display && howto.style.display !== 'none') ? 'block' : 'none';
+      if (btn.style.display === 'none') sheet.classList.remove('open');
+    }
+    new MutationObserver(sync).observe(howto, { attributes: true, attributeFilter: ['style'] });
+    sync();
+    btn.addEventListener('click', function () { sheet.classList.toggle('open'); });
+    document.getElementById('btnCreditsClose').addEventListener('click', function () { sheet.classList.remove('open'); });
+    sheet.addEventListener('click', function (e) { if (e.target === sheet) sheet.classList.remove('open'); });
+  })();
+</script>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
